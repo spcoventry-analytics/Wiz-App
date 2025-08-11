@@ -1,0 +1,9 @@
+streamlit
+pandas
+requests
+beautifulsoup4
+espn-api
+nfl-data-py
+streamlit-aggrid
+streamlit-option-menu
+requests
