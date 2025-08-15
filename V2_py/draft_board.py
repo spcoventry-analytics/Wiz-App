@@ -12,6 +12,30 @@ def show_draft_board():
         st.warning("Draft board info not set. Please configure your league first.")
         return
 
+    team_colors = {
+        "Team 1": "#f94144", "Team 2": "#f3722c", "Team 3": "#f8961e", "Team 4": "#f9844a", "Team 5": "#f9c74f", "Team 6": "#90be6d", 
+        "Team 7": "#43aa8b", "Team 8": "#4d908e", "Team 9": "#577590", "Team 10": "#219ebc", "Team 11": "#277DA1", "Team 12": "#0f4c5c"}
+    position_colors = {
+        "QB": "#9dd9d2", "RB": "#5c374c", "WR": "#392f5a", "TE": "#985277", 
+        "DL": "#918450", "LB": "#d8c99b", "DB": "#585123", "Def": "#babd8d", 
+        "K": "#c200fb"}
+
+    def draft_card(pick):
+        player = st.session_state['player_data'].get(pick['espn_id'], {}).get('name', 'Unknown Player')
+        team_bg = team_colors.get(pick['team'], "#FFFFFF")
+        pos_color = position_colors.get(pick['position'], "#CCCCCC")
+        st.markdown(
+            f"""
+            <div style="background-color:{team_bg};padding:10px;border-radius:8px;margin-bottom:10px;">
+            <span style="border:2px solid {pos_color};padding:5px 10px;border-radius:5px;">
+                <b>{player}</b> ({pick['position']})
+            </span>
+            <br>
+            <small>{pick['team']}</small>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
     rounds = list(range(1, num_rounds + 1))
 
     # Build table header

@@ -1,11 +1,12 @@
 streamlit
+streamlit_option_menu
 pandas
 numpy
 plotly
 requests
 beautifulsoup4
 espn-api
-nfl-data-py
+nfl_data_py
 streamlit-aggrid
 streamlit-option-menu
 json
