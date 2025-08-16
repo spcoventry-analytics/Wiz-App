@@ -85,10 +85,11 @@ def show_configuration():
             st.warning("Could not fetch league name. Check credentials and season.")
     except Exception as e:
             st.error(f"Error connecting to ESPN API via espn-api package: {e}")
-    st.session_state['csv_filename'] = f"draft_results_{league_id}_{season_id}.csv"
+            return
+    st.session_state['csv_filename'] = f"draft_results_{st.session_state['league_id']}_{st.session_state['season_id']}.csv"
     try:
-        with open(st.session_state['csv_filename'], "r") as f:
-            st.session_state['player_data_all'] = read_csv(st.session_state['csv_filename'])
+        st.session_state['player_data_all'] = pd.read_csv(st.session_state['csv_filename'])
+        st.success(f"Loaded draft CSV: {st.session_state['csv_filename']}")
     except FileNotFoundError:
         # Normalize player_map to always have player_id and name columns
         players_data = []
@@ -124,17 +125,22 @@ def show_configuration():
             merged_data = pd.merge(merged_data, cujos_raw, left_on="mfl_id", right_on="id", how="left")
             cujos_proj = pd.read_csv("cujos_projections_2025_wk0.csv")  # Assuming this is the projection data
             merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
-    
+
         st.write("### Merged Player Data:")
-        st.dataframe(merged_data)
         merged_data["pick_number"] = 0
+        merged_data["owner"] = ""
+        #merged_data["team_x"].fillna("FA", inplace=True)
+        #merged_data["team_x"].replace(None, "FA", inplace=True)
         st.session_state['player_data_all'] = merged_data
-        write_csv(st.session_state['csv_filename'], merged_data)
-        st.success(f"Draft csv to {st.session_state['csv_filename']}!")
-        keep_columns = ['name_x', 'position', 'team_x', # Who
-                         'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp',  # What
-                         'age', 'college', 'draft_year_x', 'weight', 'espn_id', "pick_number" # Profile
-                        ] # History
-        st.session_state['player_summary'] = merged_data[keep_columns]
+        st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
+        st.success(f"Draft csv created: {st.session_state['csv_filename']}!")
+
+    keep_columns = ['name_x', 'position', 'team_x', # who 
+                   'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', # what
+                   'age', 'college', 'draft_year_x', 'weight', 'espn_id', "pick_number"] # Bio and History would be next
+    st.session_state['player_summary'] = st.session_state['player_data_all'][keep_columns]
+    st.write("### Next pick after loading:")
+    st.session_state["pick_number_input"] = st.session_state['player_data_all']['pick_number'].max() + 1
+    st.write(st.session_state["pick_number_input"])
     st.write("### Key Facts:")
     st.dataframe(st.session_state['player_summary'])
