@@ -85,43 +85,56 @@ def show_configuration():
             st.warning("Could not fetch league name. Check credentials and season.")
     except Exception as e:
             st.error(f"Error connecting to ESPN API via espn-api package: {e}")
-
+    st.session_state['csv_filename'] = f"draft_results_{league_id}_{season_id}.csv"
+    try:
+        with open(st.session_state['csv_filename'], "r") as f:
+            st.session_state['player_data_all'] = read_csv(st.session_state['csv_filename'])
+    except FileNotFoundError:
         # Normalize player_map to always have player_id and name columns
-    players_data = []
-    for k, v in league.player_map.items():
-        if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
-            # id: name
-            players_data.append({"player_id": k, "name": v})
-        else:
-            # name: id
-            players_data.append({"player_id": v, "name": k})
+        players_data = []
+        for k, v in league.player_map.items():
+            if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
+                # id: name
+                players_data.append({"player_id": k, "name": v})
+            else:
+                # name: id
+                players_data.append({"player_id": v, "name": k})
+        espn_players_df = pd.DataFrame(players_data).drop_duplicates()
+        st.write("### League Player Universe (IDs and Names only, unique)")
+        st.dataframe(espn_players_df)
 
-    espn_players_df = pd.DataFrame(players_data).drop_duplicates()
-    st.write("### League Player Universe (IDs and Names only, unique)")
-    st.dataframe(espn_players_df)
+        # Print league.settings for inspection (as JSON for clarity)
+        #st.write("### League Settings Object:")
+        #st.json(vars(league.settings))
+        #st.write("### League Object:")
+        #st.json(vars(league))
+        #st.write("League attributes and methods:")
+        #st.write(dir(league))
 
-    # Print league.settings for inspection (as JSON for clarity)
-    #st.write("### League Settings Object:")
-    #st.json(vars(league.settings))
-    #st.write("### League Object:")
-    #st.json(vars(league))
-    #st.write("League attributes and methods:")
-    #st.write(dir(league))
+        # Display the player_map as a DataFrame
+        st.write("### Player Class ID crosswalk:")
+        crosswalk = nfl.import_ids()
+        st.write(crosswalk)  # Uncomment to display the crosswalk data
 
-    # Display the player_map as a DataFrame
-    st.write("### Player Class ID crosswalk:")
-    crosswalk = nfl.import_ids()
-    st.write(crosswalk)  # Uncomment to display the crosswalk data
-
-    # Merge Data
-    merged_data = pd.merge(espn_players_df, crosswalk, left_on="player_id", right_on="espn_id", how="left")
-    if selected_league == "Cujos League":
-        cujos_raw = pd.read_csv("cujos_raw_stats_2025_wk0.csv")  # This was a rush option Is should have folders for each league and let it pick the year.
-        st.write("### Cujos Raw Data:")
-        merged_data = pd.merge(merged_data, cujos_raw, left_on="mfl_id", right_on="id", how="left")
-        cujos_proj = pd.read_csv("cujos_projections_2025_wk0.csv")  # Assuming this is the projection data
-        merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
+        # Merge Data
+        merged_data = pd.merge(espn_players_df, crosswalk, left_on="player_id", right_on="espn_id", how="left")
+        if selected_league == "Cujos League":
+            cujos_raw = pd.read_csv("cujos_raw_stats_2025_wk0.csv")  # This was a rush option Is should have folders for each league and let it pick the year.
+            st.write("### Cujos Raw Data:")
+            merged_data = pd.merge(merged_data, cujos_raw, left_on="mfl_id", right_on="id", how="left")
+            cujos_proj = pd.read_csv("cujos_projections_2025_wk0.csv")  # Assuming this is the projection data
+            merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
     
-    st.write("### Merged Player Data:")
-    st.dataframe(merged_data)
-    st.session_state['player_data_all'] = merged_data
+        st.write("### Merged Player Data:")
+        st.dataframe(merged_data)
+        merged_data["pick_number"] = 0
+        st.session_state['player_data_all'] = merged_data
+        write_csv(st.session_state['csv_filename'], merged_data)
+        st.success(f"Draft csv to {st.session_state['csv_filename']}!")
+        keep_columns = ['name_x', 'position', 'team_x', # Who
+                         'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp',  # What
+                         'age', 'college', 'draft_year_x', 'weight', 'espn_id', "pick_number" # Profile
+                        ] # History
+        st.session_state['player_summary'] = merged_data[keep_columns]
+    st.write("### Key Facts:")
+    st.dataframe(st.session_state['player_summary'])
