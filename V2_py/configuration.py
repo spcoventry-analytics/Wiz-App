@@ -81,6 +81,16 @@ def show_configuration():
                 st.write(team)
             # Draft Rounds
             st.write(f"**Draft Rounds:** {num_rounds}")
+
+            # Draft Order UI
+            st.write("### Set Draft Order (enter a number for each team)")
+            draft_order_inputs = {}
+            for team in teams:
+                draft_order_inputs[team] = st.number_input(f"Draft position for {team}", min_value=1, max_value=len(teams), step=1, value=teams.index(team)+1, key=f"draft_order_{team}")
+            # Sort teams by entered draft position
+            sorted_teams = sorted(teams, key=lambda t: draft_order_inputs[t])
+            st.session_state['draft_order'] = sorted_teams
+            st.write("Current Draft Order:", st.session_state['draft_order'])
         else:
             st.warning("Could not fetch league name. Check credentials and season.")
     except Exception as e:
@@ -127,8 +137,22 @@ def show_configuration():
             merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
 
         st.write("### Merged Player Data:")
+
         merged_data["pick_number"] = 0
         merged_data["owner"] = ""
+        merged_data["PPG"] = merged_data["points"] / 17
+        merged_data = merged_data.sort_values("PPG", ascending=False)
+        merged_data["depth"] = merged_data.apply(
+            lambda row: (
+                9 if pd.isnull(row["team_x"]) or pd.isnull(row["position"]) or pd.isnull(row["points"])
+                else merged_data[
+                    (merged_data["team_x"] == row["team_x"]) &
+                    (merged_data["position"] == row["position"]) &
+                    (merged_data["points"] >= row["points"])
+                ].shape[0]
+            ),
+            axis=1
+        )
         #merged_data["team_x"].fillna("FA", inplace=True)
         #merged_data["team_x"].replace(None, "FA", inplace=True)
         st.session_state['player_data_all'] = merged_data
@@ -136,7 +160,7 @@ def show_configuration():
         st.success(f"Draft csv created: {st.session_state['csv_filename']}!")
 
     keep_columns = ['name_x', 'position', 'team_x', # who 
-                   'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', # what
+                   'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', "depth", # what
                    'age', 'college', 'draft_year_x', 'weight', 'espn_id', "pick_number"] # Bio and History would be next
     st.session_state['player_summary'] = st.session_state['player_data_all'][keep_columns]
     st.write("### Next pick after loading:")

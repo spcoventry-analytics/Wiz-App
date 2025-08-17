@@ -8,7 +8,7 @@ from enter_pick import show_enter_pick
 from consider_options import show_consider_options
 from current_plan import show_current_plan
 from configuration import show_configuration
-# Football API
+
 from espn_api.football import League
 
 # Set page config for mobile friendliness
@@ -39,7 +39,10 @@ selected = option_menu(
     }
 )
 
-
+st.session_state['position_colors'] = {
+    "QB": "#336699", "RB": "#9ee493", "WR": "#86bbd8", "TE": "#2f4858", 
+    "DL": "#7d82b8", "LB": "#613f75", "DB": "#e5c3d1", "Def": "#babd8d", 
+    "K": "#5465ff"}
 
 
 # Display content based on menu selection with Enter Pick toggle
