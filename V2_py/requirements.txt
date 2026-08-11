@@ -8,5 +8,3 @@ beautifulsoup4
 espn-api
 nfl_data_py
 streamlit-aggrid
-streamlit-option-menu
-json

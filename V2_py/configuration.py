@@ -111,8 +111,8 @@ def show_configuration():
                 # name: id
                 players_data.append({"player_id": v, "name": k})
         espn_players_df = pd.DataFrame(players_data).drop_duplicates()
-        st.write("### League Player Universe (IDs and Names only, unique)")
-        st.dataframe(espn_players_df)
+        #st.write("### League Player Universe (IDs and Names only, unique)")
+        #st.dataframe(espn_players_df)
 
         # Print league.settings for inspection (as JSON for clarity)
         #st.write("### League Settings Object:")
@@ -123,9 +123,9 @@ def show_configuration():
         #st.write(dir(league))
 
         # Display the player_map as a DataFrame
-        st.write("### Player Class ID crosswalk:")
+        #st.write("### Player Class ID crosswalk:")
         crosswalk = nfl.import_ids()
-        st.write(crosswalk)  # Uncomment to display the crosswalk data
+        #st.write(crosswalk)  # Uncomment to display the crosswalk data
 
         # Merge Data
         merged_data = pd.merge(espn_players_df, crosswalk, left_on="player_id", right_on="espn_id", how="left")
@@ -135,7 +135,12 @@ def show_configuration():
             merged_data = pd.merge(merged_data, cujos_raw, left_on="mfl_id", right_on="id", how="left")
             cujos_proj = pd.read_csv("cujos_projections_2025_wk0.csv")  # Assuming this is the projection data
             merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
-
+        if selected_league == "Family League":
+            family_raw = pd.read_csv("family_raw_stats_2025_wk0.csv")
+            st.write("### Family Raw Data:")
+            merged_data = pd.merge(merged_data, family_raw, left_on="mfl_id", right_on="id", how="left")
+            family_proj = pd.read_csv("family_projections_2025_wk0.csv")
+            merged_data = pd.merge(merged_data, family_proj, left_on="player", right_on="player", how="left")
         st.write("### Merged Player Data:")
 
         merged_data["pick_number"] = 0
@@ -161,7 +166,7 @@ def show_configuration():
 
     keep_columns = ['name_x', 'position', 'team_x', # who 
                    'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', "depth", # what
-                   'age', 'college', 'draft_year_x', 'weight', 'espn_id', "pick_number"] # Bio and History would be next
+                   'age', 'college', 'draft_year_x', 'weight', 'PPG', 'espn_id', "pick_number"] # Bio and History would be next
     st.session_state['player_summary'] = st.session_state['player_data_all'][keep_columns]
     st.write("### Next pick after loading:")
     st.session_state["pick_number_input"] = st.session_state['player_data_all']['pick_number'].max() + 1
