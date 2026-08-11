@@ -97,10 +97,42 @@ def show_configuration():
             st.error(f"Error connecting to ESPN API via espn-api package: {e}")
             return
     st.session_state['csv_filename'] = f"draft_results_{st.session_state['league_id']}_{st.session_state['season_id']}.csv"
+    
+    # Check if draft CSV exists
+    import os
+    draft_exists = os.path.exists(st.session_state['csv_filename'])
+    
+    # Let user choose: load existing or start fresh
+    col1, col2 = st.columns(2)
+    with col1:
+        load_existing = st.button("📂 Load Existing Draft", disabled=not draft_exists)
+    with col2:
+        start_fresh = st.button("🆕 Start Fresh Draft")
+    
+    if start_fresh:
+        st.session_state['force_fresh_draft'] = True
+        st.rerun()
+    
+    if draft_exists and not st.session_state.get('force_fresh_draft', False):
+        if load_existing:
+            st.session_state['player_data_all'] = pd.read_csv(st.session_state['csv_filename'])
+            st.success(f"Loaded draft CSV: {st.session_state['csv_filename']}")
+        else:
+            st.info(f"Existing draft found: {st.session_state['csv_filename']} — Click 'Load Existing Draft' to resume or 'Start Fresh' for a new draft")
+            return
+    
+    if st.session_state.get('force_fresh_draft', False) or not draft_exists:
+        try:
+            # Force fresh draft if user clicked button or no file exists
+            if draft_exists and st.session_state.get('force_fresh_draft', False):
+                st.warning(f"Starting fresh draft — deleting {st.session_state['csv_filename']}")
+                os.remove(st.session_state['csv_filename'])
+                st.session_state['force_fresh_draft'] = False
+        except Exception as e:
+            st.error(f"Could not delete existing file: {e}")
+            return
+    
     try:
-        st.session_state['player_data_all'] = pd.read_csv(st.session_state['csv_filename'])
-        st.success(f"Loaded draft CSV: {st.session_state['csv_filename']}")
-    except FileNotFoundError:
         # Normalize player_map to always have player_id and name columns
         players_data = []
         for k, v in league.player_map.items():
@@ -143,6 +175,25 @@ def show_configuration():
             merged_data = pd.merge(merged_data, family_proj, left_on="player", right_on="player", how="left")
         st.write("### Merged Player Data:")
 
+        # IMPORTANT: Create unique player identifier (name + position + team)
+        # This allows multi-position eligible players (Travis Hunter) AND handles different players with same name
+        merged_data["points"] = pd.to_numeric(merged_data["points"], errors="coerce")
+        merged_data["team_x"] = merged_data["team_x"].fillna("FA").astype(str)
+        merged_data["position"] = merged_data["position"].fillna("UNK").astype(str)
+        
+        # Create unique_player_id: "name_position_team" to avoid cross-position picks
+        merged_data["unique_player_id"] = (
+            merged_data["name_x"].fillna("") + "_" + 
+            merged_data["position"] + "_" + 
+            merged_data["team_x"]
+        )
+        
+        # Check for actual duplicates (same unique_player_id from merge errors)
+        # Keep only the row with the highest projected points for true duplicates
+        if merged_data.duplicated(subset=["unique_player_id"], keep=False).any():
+            merged_data = merged_data.sort_values("points", ascending=False, na_position="last")
+            merged_data = merged_data.drop_duplicates(subset=["unique_player_id"], keep="first")
+        
         merged_data["pick_number"] = 0
         merged_data["owner"] = ""
         merged_data["PPG"] = merged_data["points"] / 17
@@ -163,6 +214,9 @@ def show_configuration():
         st.session_state['player_data_all'] = merged_data
         st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
         st.success(f"Draft csv created: {st.session_state['csv_filename']}!")
+    except Exception as e:
+        st.error(f"Error creating player data: {e}")
+        return
 
     keep_columns = ['name_x', 'position', 'team_x', # who 
                    'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', "depth", # what
