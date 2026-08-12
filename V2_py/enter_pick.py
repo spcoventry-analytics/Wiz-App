@@ -100,9 +100,6 @@ def show_enter_pick():
             # Combine both: ESPN ID variants + same-name variants
             all_to_draft = pd.concat([all_variants, same_name_variants]).drop_duplicates(subset=["unique_player_id"])
             
-            st.write(f"Removing {len(all_to_draft)} row(s):")
-            st.write(all_to_draft[['name_x', 'position', 'team_x']])
-            
             # Update all variants with same ESPN ID OR same name_team combo
             st.session_state['player_data_all'].loc[
                 st.session_state['player_data_all']["unique_player_id"].isin(all_to_draft["unique_player_id"]), 
@@ -114,13 +111,7 @@ def show_enter_pick():
             ] = pick_league_team
             
             st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
-            st.success(f"Player {pick_name} ({pick_position} - {pick_team}) has been assigned to pick {pick_number} for team {pick_league_team}.")
-            if len(all_to_draft) > 1:
-                st.info(f"✓ All {len(all_to_draft)} player variants removed from board (includes same-name players)")
-            st.success(f"Pick submitted to {st.session_state['csv_filename']}!")
             st.session_state["pick_number_input"] = st.session_state['player_data_all']['pick_number'].max() + 1
-            # Hide the entry form after submission  This does not work but we are moving on
-            if "hide_enter_pick" in globals():
-                hide_enter_pick()
-            else:
-                st.session_state['show_enter_pick'] = False
+            st.session_state['show_enter_pick'] = False
+            st.success(f"✓ {pick_name} added to {pick_league_team} at pick #{pick_number}")
+            st.rerun()

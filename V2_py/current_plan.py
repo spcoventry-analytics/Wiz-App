@@ -11,7 +11,7 @@ def show_current_plan():
     position_colors = st.session_state.get('position_colors', {})
     slot_counts = st.session_state.get('slot_counts', {})
     tier_baselines = st.session_state.get('tier_baselines', {})
-    your_team_default = st.session_state.get('your_team', draft_order[0] if draft_order else None)
+    your_team_default = st.session_state.get('my_team', draft_order[0] if draft_order else None)
     
     if player_data_all is None or player_data_all.empty:
         st.warning("No player data available.")
@@ -32,26 +32,11 @@ def show_current_plan():
     # Get picks made by this team
     team_picks = player_data_all[(player_data_all['pick_number'] > 0) & (player_data_all['owner'] == team_to_analyze)]
     
-    # Count filled slots by position
+    # Count filled slots by position (BASE positions only, not including FLEX)
     filled_by_position = {}
     for pos in slot_counts.keys():
-        if pos not in ["IR", ""]:
+        if pos not in ["IR", "", "FLEX"]:
             filled_by_position[pos] = len(team_picks[team_picks['position'] == pos])
-    
-    # FLEX capacity: can be filled by RB, WR, or TE
-    flex_slots_available = slot_counts.get("FLEX", 0)
-    flex_positions = ["RB", "WR", "TE"]
-    
-    # Recalculate RB/WR/TE capacity accounting for FLEX
-    adjusted_capacity = {}
-    adjusted_capacity["RB"] = slot_counts.get("RB", 0) + flex_slots_available
-    adjusted_capacity["WR"] = slot_counts.get("WR", 0) + flex_slots_available
-    adjusted_capacity["TE"] = slot_counts.get("TE", 0) + flex_slots_available
-    
-    # Keep other positions as-is (LB, DL, DB, etc.)
-    for pos in slot_counts.keys():
-        if pos not in ["IR", "", "RB", "WR", "TE", "FLEX"]:
-            adjusted_capacity[pos] = slot_counts.get(pos, 0)
     
     # Available players (not yet drafted)
     available_players = player_data_all[player_data_all["pick_number"] == 0]
@@ -60,45 +45,62 @@ def show_current_plan():
         st.warning("No available players remaining!")
         return
     
-    # Calculate position urgency
+    # Explanatory notes in expander (not intrusive on mobile)
+    with st.expander("ℹ️ How to read this table"):
+        st.write("""
+        - **Tier** = which slot you're filling (RB1=1st RB slot, RB2=2nd RB slot, etc.)
+        - **Baseline** = average PPG of that tier from the full player pool at draft start
+        - **Value** = Player's PPG minus baseline (anything >0 is above average, >1 is significantly above)
+        - **Starters Left** = available players ABOVE this tier's baseline (true starter quality)
+        - **Drafted (ADP≤Best)** = competitors' picks at this position with ADP ≤ best available (scarcity indicator)
+        - 🔴 **CRITICAL**: Not enough starters for remaining slots or very scarce
+        - 🟠 **HIGH**: Multiple empty slots or high scarcity
+        - 🟡 **MEDIUM**: One empty slot + moderate scarcity
+        - 🟢 **LOW**: Slots filled or abundant starters
+        """)
+    
+    st.write("")
+    
+    # Calculate position urgency for BASE positions only (not including FLEX capacity)
     num_teams = len(draft_order)
     position_analysis = []
     
-    for pos in adjusted_capacity.keys():
-        total_slots = adjusted_capacity.get(pos, 0)
+    # Process BASE positions (RB, WR, TE, QB, etc.) WITHOUT FLEX capacity
+    # Only show positions that are actually active in this league (slot_counts > 0)
+    for pos in slot_counts.keys():
+        # Filter out non-active positions: bench, flex, IR, empty, composite positions
+        if pos in ["IR", "", "FLEX", "BENCH", "BE"] or "/" in pos:
+            continue
+        
+        total_slots = slot_counts.get(pos, 0)
+        if total_slots == 0:
+            # Skip positions not in this league
+            continue
         filled_slots = filled_by_position.get(pos, 0)
         empty_slots = total_slots - filled_slots
         
-        # Determine which tier we're currently drafting from
-        # This is based on how many slots we've already filled at this position
+        # Determine which tier we're currently drafting from (based on filled slots)
         current_tier = filled_slots
         
         # Get available players at this position
-        pos_players = available_players[available_players['position'] == pos].sort_values('points', ascending=False)
+        pos_players = available_players[available_players['position'] == pos].sort_values('PPG', ascending=False)
         
         # Get tier baseline for current tier
         tier_baseline = 0
         if pos in tier_baselines and current_tier in tier_baselines[pos]:
             tier_baseline = tier_baselines[pos][current_tier]
         
-        # Count available players ABOVE this tier's baseline (startable quality for THIS slot)
+        # Count available players ABOVE this tier's baseline
         available_above_tier = len(pos_players[pos_players['PPG'] >= tier_baseline]) if tier_baseline > 0 else len(pos_players)
         
         # Best available at this position
         best_available = pos_players.iloc[0] if len(pos_players) > 0 else None
-        
-        # Scarcity calculation - ADJUSTED FOR ADP
-        # For tier-based analysis: scarcity = how many players at this position (in this tier) have been drafted
-        # Each tier has num_teams players, so max scarcity is num_teams
-        num_teams = len(draft_order)
-        drafted_at_pos = len(player_data_all[
-            (player_data_all['position'] == pos) & 
-            (player_data_all['pick_number'] > 0)
-        ])
+        best_available_value = 0
+        if best_available is not None:
+            best_available_value = best_available['PPG'] - tier_baseline
         
         # ADP-aware scarcity: only count drafted players with ADP <= best_available's ADP
-        # This filters out "wasted" high-ADP picks and shows real scarcity
-        adp_aware_drafted = drafted_at_pos  # default
+        adp_aware_drafted = 0
         if best_available is not None and pd.notna(best_available.get('adp')):
             best_available_adp = best_available['adp']
             adp_aware_drafted = len(player_data_all[
@@ -108,49 +110,37 @@ def show_current_plan():
             ])
             scarcity_ratio = adp_aware_drafted / num_teams if num_teams > 0 else 0
         else:
-            # No ADP data, fall back to basic scarcity
-            scarcity_ratio = drafted_at_pos / num_teams if num_teams > 0 else 0
+            scarcity_ratio = 0
         
-        # Urgency combines: (1) empty slots need to fill, (2) scarcity of available STARTABLE players
-        # If no starters left for this tier, it's CRITICAL
+        # Urgency: combines slot needs + scarcity
         urgency_score = (empty_slots / total_slots if total_slots > 0 else 0) + (scarcity_ratio * 0.5)
-        if available_above_tier <= empty_slots:
-            # Not enough starters left to fill all slots!
-            urgency_score += 1.0
+        if empty_slots > 0 and available_above_tier <= empty_slots:
+            urgency_score += 1.0  # CRITICAL if not enough starters
         
-        # Only show if team has slots to fill at this position or it's scarce
-        if empty_slots > 0 or scarcity_ratio > 0.3:
-            position_analysis.append({
-                'Position': pos,
-                'Slots': f"{filled_slots}/{total_slots}",
-                'Empty': empty_slots,
-                'Tier': current_tier + 1,  # Display 1-indexed
-                'Baseline (This Tier)': round(tier_baseline, 1),
-                'Best Available': best_available['name_x'] if best_available is not None else 'NONE',
-                'PPG': round(best_available['points'], 1) if best_available is not None else 0,
-                'ADP': round(best_available['adp'], 0) if best_available is not None and pd.notna(best_available.get('adp')) else 'N/A',
-                'Starters Left (Tier)': available_above_tier,
-                'Drafted (ADP ≤ Best)': adp_aware_drafted,
-                'Scarcity': f"{int(scarcity_ratio * 100)}%",
-                'Urgency': urgency_score,
-            })
+        # Always show position (not filtered by urgency), prioritized in sorted table
+        position_analysis.append({
+            'Position': pos,
+            'Slots': f"{filled_slots}/{total_slots}",
+            'Empty': empty_slots,
+            'Tier': current_tier + 1,  # Display 1-indexed
+            'Baseline': round(tier_baseline, 1),
+            'Best Available': best_available['name_x'] if best_available is not None else 'NONE',
+            'PPG': round(best_available['PPG'], 1) if best_available is not None else 0,
+            'Value': round(best_available_value, 1),
+            'ADP': round(best_available['adp'], 0) if best_available is not None and pd.notna(best_available.get('adp')) else 'N/A',
+            'Starters Left': available_above_tier,
+            'Drafted (ADP≤Best)': adp_aware_drafted,
+            'Scarcity %': f"{int(scarcity_ratio * 100)}%",
+            'Urgency': urgency_score,
+        })
     
     # Sort by urgency (highest first = most critical to address)
     position_priority = pd.DataFrame(position_analysis).sort_values('Urgency', ascending=False)
     
     # Display position priority
     st.write(f"### Position Priority for **{team_to_analyze}**")
-    st.write("**Tier** = which slot you're filling (1st RB = Tier 1, 2nd RB = Tier 2, etc.)")
-    st.write("**Baseline (This Tier)** = avg PPG of that tier from draft pool snapshot at start")
-    st.write("**Starters Left (Tier)** = available players ABOVE this tier's baseline")
-    st.write("**ADP-aware scarcity** = only counts drafted players with ADP ≤ best available")
-    st.write("**🔴 CRITICAL**: Not enough starters left to fill remaining slots OR multiple empty slots + high scarcity")
-    st.write("**🟠 HIGH**: Multiple empty slots OR real scarcity of top players")
-    st.write("**🟡 MEDIUM**: One empty slot + moderate scarcity")
-    st.write("**🟢 LOW**: Slots filled OR plenty of starters left for this tier")
-    st.write("")
     
-    # Color coded display
+    # Color coded display with View button
     for idx, row in position_priority.iterrows():
         pos_color = position_colors.get(row['Position'], '#CCCCCC')
         urgency_val = row['Urgency']
@@ -164,42 +154,104 @@ def show_current_plan():
         else:
             priority_level = "🟢 LOW"
         
-        col1, col2, col3, col4, col5 = st.columns([0.8, 1.5, 2, 1.5, 1.2])
+        col1, col2, col3, col4, col5 = st.columns([0.7, 2, 1.8, 1.2, 1])
         
         with col1:
-            st.markdown(f"<div style='background-color:{pos_color}; padding:8px; border-radius:4px; text-align:center; font-weight:bold;'>{row['Position']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background-color:{pos_color}; padding:8px; border-radius:4px; text-align:center; font-weight:bold; color:white;'>{row['Position']}</div>", unsafe_allow_html=True)
         
         with col2:
-            st.write(f"**{row['Best Available']}**")
-            st.write(f"{row['PPG']} PPG | ADP: {row['ADP']}")
-            st.write(f"*Tier {row.get('Tier', '?')} baseline: {row.get('Baseline (This Tier)', '?')} PPG*")
+            st.write(f"**{row['Best Available']}** | {row['PPG']} PPG")
+            st.write(f"*Value: {row['Value']:+.1f} | Tier {int(row['Tier'])} base: {row['Baseline']}*")
         
         with col3:
             st.write(f"Slots: {row['Slots']}")
-            drafted_col = row.get('Drafted (ADP ≤ Best)', row.get('Drafted (Top N)', '?'))
-            st.write(f"Starters: {row.get('Starters Left (Tier)', '?')} | Drafted: {drafted_col}")
+            st.write(f"Starters: {row['Starters Left']} | Scarcity: {row['Scarcity %']}")
         
         with col4:
-            st.write(f"{priority_level}")
-            st.write(f"Scarcity: {row['Scarcity']}")
+            st.write(priority_level)
         
         with col5:
-            if st.button("📊 View", key=f"view_{row['Position']}_{team_to_analyze}"):
+            if st.button("📊", key=f"view_{row['Position']}_{idx}", help="View players at this position"):
                 st.session_state['consider_filter_position'] = row['Position']
-                st.info(f"✅ Go to **Consider Options** to view {row['Position']} players")
+                st.session_state['view_position_triggered'] = True
     
-    # Show team's current roster
+    
+    # Show team's current roster (actual picks made)
     st.divider()
-    st.write(f"### {team_to_analyze}'s Current Roster:")
+    st.write(f"### {team_to_analyze}'s Draft Picks")
+    
     if not team_picks.empty:
-        roster_display = team_picks[['name_x', 'position', 'points', 'pick_number']].copy()
-        roster_display.columns = ['Player', 'Pos', 'Proj PPG', 'Pick #']
-        roster_display = roster_display.sort_values('Pick #')
-        st.dataframe(roster_display, use_container_width=True, hide_index=True)
+        # Build roster with tier baselines
+        roster_rows = []
+        total_ppg = 0
+        total_marg_val = 0
+        
+        # Sort by pick number to show draft order
+        team_picks_sorted = team_picks.sort_values('pick_number')
+        
+        for idx, pick in team_picks_sorted.iterrows():
+            pos = pick['position']
+            
+            # Find which slot number this is for this position
+            pos_picks_before = len(team_picks_sorted[(team_picks_sorted['position'] == pos) & (team_picks_sorted['pick_number'] < pick['pick_number'])])
+            slot_num = pos_picks_before + 1
+            slot_label = f"{pos}{slot_num}"
+            
+            # Get tier baseline for this slot
+            tier_baseline = 0
+            if pos in tier_baselines and (slot_num - 1) in tier_baselines[pos]:
+                tier_baseline = tier_baselines[pos][slot_num - 1]
+            
+            # Calculate marginal value (PPG - baseline)
+            player_ppg = pick['PPG']
+            marginal_value = player_ppg - tier_baseline
+            
+            # Total projected points (PPG * 17 games)
+            total_fpts = player_ppg * 17
+            
+            roster_rows.append({
+                'Slot': pos,
+                'S#': slot_label,
+                'Player': pick['name_x'],
+                'Pick #': int(pick['pick_number']),
+                'FPTS': round(total_fpts, 1),
+                'PPG': round(player_ppg, 1),
+                'Marg Val': round(marginal_value, 1),
+                'Baseline': round(tier_baseline, 1),
+            })
+            total_ppg += player_ppg
+            total_marg_val += marginal_value
+        
+        roster_df = pd.DataFrame(roster_rows)
+        
+        # Display as formatted table
+        st.dataframe(
+            roster_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'Slot': st.column_config.TextColumn(width="small"),
+                'S#': st.column_config.TextColumn(width="small"),
+                'Pick #': st.column_config.NumberColumn(format="%d", width="small"),
+                'Player': st.column_config.TextColumn(width="large"),
+                'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
+                'PPG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
+                'Baseline': st.column_config.NumberColumn(format="%.1f", width="small"),
+            }
+        )
+        
+        # Summary stats
+        st.write("")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total PPG", round(total_ppg, 1))
+        with col2:
+            st.metric("Avg Marg Val", round(total_marg_val / len(roster_df), 2) if len(roster_df) > 0 else 0)
+        with col3:
+            st.metric("Total Marg Val", round(total_marg_val, 1))
+        with col4:
+            st.metric("Picks Made", len(team_picks))
     else:
         st.write(f"No picks made yet.")
-
-    
-    
-    
     

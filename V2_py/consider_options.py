@@ -37,8 +37,15 @@ def show_consider_options():
     st.write("### Top 10 Players by ADP:")
     #st.dataframe(adp)
 
-    # Start filters empty
-    position = st.radio("Position (optional)", [""] + list(available_players["position"].unique()), horizontal=True)
+    # Start filters empty (but check for position preset from Current Plan)
+    default_position = st.session_state.get('consider_filter_position', '')
+    position = st.radio("Position (optional)", [""] + list(available_players["position"].unique()), horizontal=True, 
+                        index=([""] + list(available_players["position"].unique())).index(default_position) if default_position in available_players["position"].unique() else 0)
+    
+    # Clear the filter after using it once
+    if 'consider_filter_position' in st.session_state:
+        del st.session_state['consider_filter_position']
+    
     team = st.selectbox("NFL Team (optional)", [""] + sorted(list(available_players["team_x"].unique().astype(str))))
 
     # Filter player names if position or team is selected
