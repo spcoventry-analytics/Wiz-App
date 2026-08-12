@@ -54,7 +54,7 @@ def show_draft_board():
                     key="edit_team_select"
                 )
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 if st.button("✓ Save Changes", key="save_edit_pick"):
                     # Update both pick number and owner
@@ -72,6 +72,37 @@ def show_draft_board():
                     st.rerun()
             
             with col2:
+                if st.button("🗑️ Delete Pick", key="delete_pick"):
+                    # Get the same_name_group to also delete same-name variants
+                    same_name_group = pick_row.get("same_name_group", "")
+                    
+                    # Remove the primary pick
+                    st.session_state['player_data_all'].loc[
+                        st.session_state['player_data_all']['unique_player_id'] == st.session_state['edit_pick_id'],
+                        'pick_number'
+                    ] = 0
+                    st.session_state['player_data_all'].loc[
+                        st.session_state['player_data_all']['unique_player_id'] == st.session_state['edit_pick_id'],
+                        'owner'
+                    ] = ""
+                    
+                    # Also remove all same-name variants
+                    if same_name_group:
+                        st.session_state['player_data_all'].loc[
+                            st.session_state['player_data_all']['same_name_group'] == same_name_group,
+                            'pick_number'
+                        ] = 0
+                        st.session_state['player_data_all'].loc[
+                            st.session_state['player_data_all']['same_name_group'] == same_name_group,
+                            'owner'
+                        ] = ""
+                    
+                    st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
+                    st.session_state['edit_pick_mode'] = False
+                    st.success(f"✓ Pick deleted! {pick_row['name_x']} is available again.")
+                    st.rerun()
+            
+            with col3:
                 if st.button("✕ Cancel", key="cancel_edit_pick"):
                     st.session_state['edit_pick_mode'] = False
                     st.rerun()
@@ -100,12 +131,19 @@ def show_draft_board():
             ]
             if not team_picks.empty:
                 for _, pick in team_picks.iterrows():
-                    # Show pick number, fantasy team owner, position, player name, and NFL team
-                    display_text = f"""**#{int(pick['pick_number'])}** | ({pick['position']}) - ({pick['team_x']}) 
-                    \n **{pick['name_x']}** """
+                    # Get position color (default to light gray if not found)
+                    pos_color = position_colors.get(pick['position'], "#CCCCCC")
+                    
+                    # Create color-coded player card
+                    display_text = f"""
+<div style="background-color:{pos_color}; padding:8px; border-radius:4px; margin-bottom:4px;">
+<strong>#{int(pick['pick_number'])}</strong> | {pick['position']} ({pick['team_x']})<br>
+<strong>{pick['name_x']}</strong>
+</div>
+"""
                     col1, col2 = cols[idx].columns([3, 1])
-                    col1.markdown(display_text)
-                    if col2.button("✏️", key=f"edit_pick_{int(pick['pick_number'])}"):
+                    col1.markdown(display_text, unsafe_allow_html=True)
+                    if col2.button("✏️", key=f"edit_pick_{pick['unique_player_id']}"):
                         st.session_state['edit_pick_mode'] = True
                         st.session_state['edit_pick_id'] = pick['unique_player_id']
                         st.session_state['edit_pick_number'] = int(pick['pick_number'])

@@ -1,6 +1,9 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 import requests
+import os
+import pandas as pd
+import glob
 
 # Import page modules
 from draft_board import show_draft_board
@@ -13,6 +16,45 @@ from espn_api.football import League
 
 # Set page config for mobile friendliness
 st.set_page_config(page_title="Fantasy Football Draft Board", layout="wide")
+
+# Auto-resume existing draft on startup
+def auto_resume_existing_draft():
+    """Load the latest draft CSV if one exists and hasn't been loaded yet."""
+    if st.session_state.get('draft_loaded', False):
+        return  # Already loaded
+    
+    # Find the latest draft_results_*.csv file by modification time
+    draft_files = glob.glob("draft_results_*.csv")
+    if not draft_files:
+        return  # No draft file found
+    
+    latest_file = max(draft_files, key=os.path.getmtime)
+    
+    try:
+        # Load the draft CSV
+        st.session_state['player_data_all'] = pd.read_csv(latest_file)
+        
+        # Ensure same_name_group column exists (for backwards compatibility)
+        if 'same_name_group' not in st.session_state['player_data_all'].columns:
+            st.session_state['player_data_all']['same_name_group'] = (
+                st.session_state['player_data_all']['name_x'].fillna("") + "_" + 
+                st.session_state['player_data_all']['team_x'].fillna("FA").astype(str)
+            )
+            st.session_state['player_data_all'].to_csv(latest_file, index=False)
+        
+        st.session_state['csv_filename'] = latest_file
+        st.session_state['draft_loaded'] = True
+        
+        # Extract league_id and season_id from filename (e.g., draft_results_54926_2025.csv)
+        parts = latest_file.replace("draft_results_", "").replace(".csv", "").split("_")
+        if len(parts) >= 2:
+            st.session_state['league_id'] = parts[0]
+            st.session_state['season_id'] = parts[1]
+    except Exception as e:
+        st.warning(f"Could not auto-resume draft from {latest_file}: {e}")
+
+# Call auto-resume before rendering anything
+auto_resume_existing_draft()
 
 # Icon-based menu bar across the top
 selected = option_menu(

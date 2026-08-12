@@ -73,6 +73,7 @@ def show_configuration():
         )
         st.session_state['teams'] = teams
         st.session_state['num_rounds'] = num_rounds
+        st.session_state['slot_counts'] = slot_counts
         
         if league_name:
             st.success(f"Connected to league: {league_name}")
@@ -91,6 +92,12 @@ def show_configuration():
             sorted_teams = sorted(teams, key=lambda t: draft_order_inputs[t])
             st.session_state['draft_order'] = sorted_teams
             st.write("Current Draft Order:", st.session_state['draft_order'])
+            
+            # Select your team
+            st.write("### Which team are you managing?")
+            my_team = st.selectbox("Your Team", teams, key="config_my_team")
+            st.session_state['my_team'] = my_team
+            st.info(f"You are managing: {my_team}")
         else:
             st.warning("Could not fetch league name. Check credentials and season.")
     except Exception as e:
@@ -117,6 +124,38 @@ def show_configuration():
         if load_existing:
             st.session_state['player_data_all'] = pd.read_csv(st.session_state['csv_filename'])
             st.success(f"Loaded draft CSV: {st.session_state['csv_filename']}")
+            
+            # Ensure same_name_group column exists (for backwards compatibility)
+            if 'same_name_group' not in st.session_state['player_data_all'].columns:
+                st.session_state['player_data_all']['same_name_group'] = (
+                    st.session_state['player_data_all']['name_x'].fillna("") + "_" + 
+                    st.session_state['player_data_all']['team_x'].fillna("FA").astype(str)
+                )
+                st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
+            
+            # Recalculate tier baselines from loaded data
+            tier_baselines = {}
+            draft_order_list = st.session_state.get('draft_order', [])
+            slot_counts_dict = st.session_state.get('slot_counts', {})
+            num_teams = len(draft_order_list)
+            for pos in slot_counts_dict.keys():
+                if pos in ["IR", ""]:
+                    continue
+                pos_players = st.session_state['player_data_all'][st.session_state['player_data_all']['position'] == pos].sort_values('PPG', ascending=False)
+                slots_for_pos = slot_counts_dict.get(pos, 0)
+                if pos in ["RB", "WR", "TE"]:
+                    slots_for_pos += slot_counts_dict.get("FLEX", 0)
+                tier_baselines[pos] = {}
+                for tier_num in range(slots_for_pos):
+                    start_idx = tier_num * num_teams
+                    end_idx = start_idx + num_teams
+                    tier_players = pos_players.iloc[start_idx:end_idx]
+                    if len(tier_players) > 0:
+                        baseline_ppg = tier_players['PPG'].mean()
+                        tier_baselines[pos][tier_num] = baseline_ppg
+                    else:
+                        tier_baselines[pos][tier_num] = 0
+            st.session_state['tier_baselines'] = tier_baselines
         else:
             st.info(f"Existing draft found: {st.session_state['csv_filename']} — Click 'Load Existing Draft' to resume or 'Start Fresh' for a new draft")
             return
@@ -188,6 +227,13 @@ def show_configuration():
             merged_data["team_x"]
         )
         
+        # Create same_name_group: "name_team" for deduplicating same-name players (e.g., two Josh Allens)
+        # This ensures drafting one Josh Allen removes all Josh Allen variants from the pool
+        merged_data["same_name_group"] = (
+            merged_data["name_x"].fillna("") + "_" + 
+            merged_data["team_x"]
+        )
+        
         # Check for actual duplicates (same unique_player_id from merge errors)
         # Keep only the row with the highest projected points for true duplicates
         if merged_data.duplicated(subset=["unique_player_id"], keep=False).any():
@@ -213,6 +259,39 @@ def show_configuration():
         #merged_data["team_x"].replace(None, "FA", inplace=True)
         st.session_state['player_data_all'] = merged_data
         st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
+        
+        # Calculate tier baselines for each position (snapshot of full player pool at draft start)
+        tier_baselines = {}
+        draft_order_list = st.session_state.get('draft_order', [])
+        slot_counts_dict = st.session_state.get('slot_counts', {})
+        num_teams = len(draft_order_list)
+        
+        for pos in slot_counts_dict.keys():
+            if pos in ["IR", ""]:
+                continue
+            
+            # Get all players at this position, sorted by PPG
+            pos_players = merged_data[merged_data['position'] == pos].sort_values('PPG', ascending=False)
+            
+            # How many slots for this position (including FLEX)
+            slots_for_pos = slot_counts_dict.get(pos, 0)
+            if pos in ["RB", "WR", "TE"]:
+                slots_for_pos += slot_counts_dict.get("FLEX", 0)  # Add FLEX capacity
+            
+            # Calculate tier baselines (per team slot)
+            tier_baselines[pos] = {}
+            for tier_num in range(slots_for_pos):
+                start_idx = tier_num * num_teams
+                end_idx = start_idx + num_teams
+                tier_players = pos_players.iloc[start_idx:end_idx]
+                
+                if len(tier_players) > 0:
+                    baseline_ppg = tier_players['PPG'].mean()
+                    tier_baselines[pos][tier_num] = baseline_ppg
+                else:
+                    tier_baselines[pos][tier_num] = 0
+        
+        st.session_state['tier_baselines'] = tier_baselines
         st.success(f"Draft csv created: {st.session_state['csv_filename']}!")
     except Exception as e:
         st.error(f"Error creating player data: {e}")

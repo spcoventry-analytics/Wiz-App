@@ -49,13 +49,30 @@ def show_enter_pick():
     if "pick_number_input" not in st.session_state:
         st.session_state["pick_number_input"] = next_pick_number
     pick_number = st.number_input("Pick Number", min_value=1, step=1, value=st.session_state["pick_number_input"], key="enter_pick_number")
-    # pick_number = st.number_input("Pick Number", 
-    #     min_value= st.session_state["pick_number_input"], 
-    #     step=1, 
-    #     value=st.session_state["pick_number_input"], 
-    #     key="enter_pick_number")
+    
+    # Calculate default team based on snake draft logic
     draft_order = st.session_state.get('draft_order', st.session_state.get('teams', []))
-    pick_league_team = st.radio("League Team", draft_order, horizontal=True, key="enter_pick_league_team")
+    num_teams = len(draft_order)
+    
+    if num_teams > 0:
+        # Snake draft: alternating direction each round
+        # Round 0: normal order, Round 1: reversed, Round 2: normal, etc.
+        round_num = (pick_number - 1) // num_teams
+        position_in_round = (pick_number - 1) % num_teams
+        
+        if round_num % 2 == 0:
+            # Even round (0, 2, 4...): normal order
+            default_team = draft_order[position_in_round]
+        else:
+            # Odd round (1, 3, 5...): reversed order
+            default_team = draft_order[num_teams - 1 - position_in_round]
+        
+        default_index = draft_order.index(default_team) if default_team in draft_order else 0
+    else:
+        default_team = ""
+        default_index = 0
+    
+    pick_league_team = st.radio("League Team", draft_order, horizontal=True, key="enter_pick_league_team", index=default_index)
 
     if st.button("Submit Pick", disabled=not can_submit, key="enter_pick_submit"):
         # Get the ESPN ID of the selected player
@@ -66,7 +83,7 @@ def show_enter_pick():
         if selected_player_row.empty:
             st.error("No matching player found to update. Please check filters.")
         else:
-            # Get the ESPN ID to find ALL position variants of this player
+            # Get the ESPN ID to find ALL position variants of this player (e.g., Travis Hunter)
             pick_espn_id = selected_player_row.iloc[0]["espn_id"]
             
             # Mark ALL rows with this ESPN ID as drafted (handles multi-position eligible players)
@@ -74,23 +91,32 @@ def show_enter_pick():
                 st.session_state['player_data_all']["espn_id"] == pick_espn_id
             ]
             
-            st.write(f"Removing {len(all_variants)} row(s) for ESPN ID {pick_espn_id}:")
-            st.write(all_variants[['name_x', 'position', 'team_x']])
+            # Also get same_name_group to handle duplicate names (e.g., two Josh Allens on BUF)
+            same_name_group = selected_player_row.iloc[0].get("same_name_group", "")
+            same_name_variants = st.session_state['player_data_all'][
+                st.session_state['player_data_all']["same_name_group"] == same_name_group
+            ] if same_name_group else pd.DataFrame()
             
-            # Update all variants with same ESPN ID
+            # Combine both: ESPN ID variants + same-name variants
+            all_to_draft = pd.concat([all_variants, same_name_variants]).drop_duplicates(subset=["unique_player_id"])
+            
+            st.write(f"Removing {len(all_to_draft)} row(s):")
+            st.write(all_to_draft[['name_x', 'position', 'team_x']])
+            
+            # Update all variants with same ESPN ID OR same name_team combo
             st.session_state['player_data_all'].loc[
-                st.session_state['player_data_all']["espn_id"] == pick_espn_id, 
+                st.session_state['player_data_all']["unique_player_id"].isin(all_to_draft["unique_player_id"]), 
                 "pick_number"
             ] = pick_number
             st.session_state['player_data_all'].loc[
-                st.session_state['player_data_all']["espn_id"] == pick_espn_id, 
+                st.session_state['player_data_all']["unique_player_id"].isin(all_to_draft["unique_player_id"]), 
                 "owner"
             ] = pick_league_team
             
             st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
             st.success(f"Player {pick_name} ({pick_position} - {pick_team}) has been assigned to pick {pick_number} for team {pick_league_team}.")
-            if len(all_variants) > 1:
-                st.info(f"✓ All {len(all_variants)} position variants removed from board (multi-position eligible player)")
+            if len(all_to_draft) > 1:
+                st.info(f"✓ All {len(all_to_draft)} player variants removed from board (includes same-name players)")
             st.success(f"Pick submitted to {st.session_state['csv_filename']}!")
             st.session_state["pick_number_input"] = st.session_state['player_data_all']['pick_number'].max() + 1
             # Hide the entry form after submission  This does not work but we are moving on
