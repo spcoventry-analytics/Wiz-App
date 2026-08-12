@@ -78,93 +78,101 @@ def show_consider_options():
     if team:
         filtered_players = filtered_players[filtered_players["team_x"] == team]
     
-    # === CREATE TABS: GRAPHS vs TABLE ===
-    tab_graph, tab_table = st.tabs(["📊 Gold Mine", "📋 Player Details"])
+    # === CREATE TABS: GRAPHS vs TABLE vs STRATEGY ===
+    tab_graph, tab_table, tab_strategy = st.tabs(["📊 Gold Mine", "📋 Player Details", "📈 Round Strategy"])
     
-    # === TAB 1: GOLD MINE GRAPHS ===
+    # === TAB 1: GOLD MINE GRAPHS (POSITION-GROUPED) ===
     with tab_graph:
-        # Get positions sorted by best normalized POS Value
-        positions_available = filtered_players.groupby('position')['POS_Value_Normalized'].max().sort_values(ascending=False).index
         
+        # Get positions sorted by best normalized POS Value
+        positions_available = (
+            filtered_players.groupby('position')['POS_Value_Normalized']
+            .max()
+            .sort_values(ascending=False)
+            .index
+        )
+
         for pos in positions_available:
             pos_players = filtered_players[filtered_players['position'] == pos].copy()
-            pos_players = pos_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points'])
-            
+            pos_players = pos_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points', 'adp'])
+
             if pos_players.empty:
                 continue
-            
-            # Top 10 players at this position
+
+            # Top 10 players at this position by normalized value
             pos_players = pos_players.sort_values('POS_Value_Normalized', ascending=False).head(10)
-            pos_players = pos_players.sort_values('points', ascending=True)
-            
-            color = position_colors.get(pos, '#999999')
-            
-            # Create figure for this position
+            # Sort by ADP for display
+            pos_players = pos_players.sort_values('adp', ascending=True)
+
+            color = position_colors.get(pos, '#1f77b4')
+
+            # Calculate error distances
+            error_minus = pos_players['points'] - pos_players['floor']
+            error_plus = pos_players['ceiling'] - pos_players['points']
+
+            # Format player text with normalized value badge
+            y_labels = [
+                f"<b>{name}</b>  <span style='color:gray; font-size:11px;'>({val:+.2f})</span>"
+                for name, val in zip(pos_players['name_x'], pos_players['POS_Value_Normalized'])
+            ]
+
             fig = go.Figure()
-            
-            # Add a line and dot for each player
-            for idx, (_, player) in enumerate(pos_players.iterrows()):
-                player_name = player['name_x']
-                pos_value = player['POS_Value']
-                pos_value_norm = player['POS_Value_Normalized']
-                
-                floor_points = player['floor']
-                ceiling_points = player['ceiling']
-                gun_to_head = player['points']
-                
-                # Horizontal line from floor to ceiling
-                fig.add_trace(go.Scatter(
-                    x=[floor_points, ceiling_points],
-                    y=[idx, idx],
-                    mode='lines',
-                    line=dict(color=color, width=3),
-                    hoverinfo='skip',
-                    showlegend=False
-                ))
-                
-                # Dot at gun-to-head estimate
-                fig.add_trace(go.Scatter(
-                    x=[gun_to_head],
-                    y=[idx],
+
+            # Single trace with horizontal error bars
+            fig.add_trace(
+                go.Scatter(
+                    x=pos_players['points'],
+                    y=y_labels,
                     mode='markers',
                     marker=dict(
-                        size=14,
+                        size=12,
                         color=color,
-                        line=dict(color='white', width=2)
+                        line=dict(color='white', width=1.5)
                     ),
-                    hovertemplate=f"<b>{player_name}</b><br>Points: {gun_to_head:.1f}<br>PPG: {player['PPG']:.2f}<br>POS Value: {pos_value:.2f}<br>Norm Value: {pos_value_norm:.2f}<br>Range: {floor_points:.0f}-{ceiling_points:.0f}<extra></extra>",
-                    showlegend=False
-                ))
-                
-                # Label: name above dot, normalized POS Value below
-                fig.add_annotation(
-                    x=gun_to_head,
-                    y=idx + 0.35,
-                    text=player_name,
-                    showarrow=False,
-                    font=dict(size=9),
-                    xanchor='center'
+                    error_x=dict(
+                        type='data',
+                        symmetric=False,
+                        array=error_plus,
+                        arrayminus=error_minus,
+                        color=color,
+                        thickness=2.5,
+                        width=6,
+                    ),
+                    customdata=pos_players[['PPG', 'POS_Value', 'POS_Value_Normalized', 'floor', 'ceiling', 'adp']],
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "Projected Points: <b>%{x:.1f}</b><br>"
+                        "Floor - Ceiling: %{customdata[3]:.0f} - %{customdata[4]:.0f}<br>"
+                        "PPG: %{customdata[0]:.2f}<br>"
+                        "POS Value: %{customdata[1]:.2f}<br>"
+                        "Norm Value: %{customdata[2]:.2f}<br>"
+                        "ADP: %{customdata[5]:.1f}"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
                 )
-                fig.add_annotation(
-                    x=gun_to_head,
-                    y=idx - 0.35,
-                    text=f"({pos_value_norm:.2f})",
-                    showarrow=False,
-                    font=dict(size=8, color='gray'),
-                    xanchor='center'
-                )
-            
-            fig.update_layout(
-                title=f"{pos} - Top Value Edges (Normalized)",
-                xaxis_title="Projected Points (Season)",
-                yaxis_title="Players",
-                hovermode='closest',
-                height=500,
-                template='plotly_white',
-                yaxis=dict(showticklabels=False),
-                margin=dict(l=50, r=50, t=60, b=50)
             )
-            
+
+            # Dynamic plot height
+            dynamic_height = max(300, len(pos_players) * 45 + 100)
+
+            fig.update_layout(
+                title=dict(
+                    text=f"<b>{pos}</b> — Top Value Edges (Normalized Value in parens)",
+                    font=dict(size=16)
+                ),
+                xaxis_title="Projected Points (Floor to Ceiling)",
+                yaxis=dict(
+                    type='category',
+                    autorange=True,
+                    tickfont=dict(size=12),
+                ),
+                height=dynamic_height,
+                template='plotly_white',
+                margin=dict(l=150, r=40, t=50, b=50),
+                hoverlabel=dict(bgcolor="white", font_size=12),
+            )
+
             st.plotly_chart(fig, use_container_width=True)
     
     # === TAB 2: FULL PLAYER DETAILS TABLE ===
@@ -194,6 +202,226 @@ def show_consider_options():
             hide_index=True,
             use_container_width=True
         )
+    
+    # === TAB 3: ROUND STRATEGY (POINT RANGES BY DRAFT ROUND) ===
+    with tab_strategy:
+        st.write("**Round Strategy: Build Your Hypothetical Roster**")
+        st.write("*For each round, select which position to draft. See the expected player and points.*")
+        
+        # Initialize hypothetical picks in session state if not present
+        if 'hypothetical_picks' not in st.session_state:
+            st.session_state['hypothetical_picks'] = {}
+        
+        # Add positions to available data for this tab
+        available_players_strategy = available_players.copy()
+        # Drop players without ADP (they can't be assigned to a draft round)
+        available_players_strategy = available_players_strategy.dropna(subset=['adp'])
+        
+        if available_players_strategy.empty:
+            st.warning("No players with ADP data available for round strategy.")
+            return
+        
+        available_players_strategy['draft_round'] = np.ceil(available_players_strategy['adp'] / num_teams).astype(int)
+        available_players_strategy['draft_round'] = available_players_strategy['draft_round'].clip(lower=1, upper=21)
+        
+        # Get available positions
+        available_positions_list = sorted(available_players_strategy['position'].unique())
+        
+        # Create a 3-column layout for round selection (for mobile/tablet)
+        st.write("**Select Position for Each Round:**")
+        
+        # Use columns to organize selectors in a grid
+        cols = st.columns(3)
+        for round_num in range(1, 22):
+            col_idx = (round_num - 1) % 3
+            
+            with cols[col_idx]:
+                selected_pos = st.selectbox(
+                    f"Round {round_num}",
+                    ["—"] + available_positions_list,
+                    key=f"round_{round_num}_pos",
+                    index=0
+                )
+                
+                # If a position is selected for this round, find the best player
+                if selected_pos != "—":
+                    # Find players at this position in this draft round
+                    round_players = available_players_strategy[
+                        (available_players_strategy['position'] == selected_pos) &
+                        (available_players_strategy['draft_round'] == round_num)
+                    ].sort_values('POS_Value_Normalized', ascending=False)
+                    
+                    if not round_players.empty:
+                        best_player = round_players.iloc[0]
+                        st.session_state['hypothetical_picks'][round_num] = {
+                            'position': selected_pos,
+                            'player_name': best_player['name_x'],
+                            'player_id': best_player.get('espn_id', ''),
+                            'points': best_player['points'],
+                            'ppg': best_player['PPG'],
+                            'norm_value': best_player['POS_Value_Normalized']
+                        }
+                        
+                        # Display the selected player
+                        st.write(f"📍 **{best_player['name_x']}**")
+                        st.caption(f"{best_player['points']:.0f} pts | {best_player['POS_Value_Normalized']:.2f} norm val")
+                    else:
+                        st.caption("No players available in this round")
+                else:
+                    # Remove from hypothetical if deselected
+                    if round_num in st.session_state['hypothetical_picks']:
+                        del st.session_state['hypothetical_picks'][round_num]
+        
+        # Show hypothetical roster summary
+        if st.session_state['hypothetical_picks']:
+            st.divider()
+            st.write("**Hypothetical Roster Summary:**")
+            
+            hyp_picks = st.session_state['hypothetical_picks']
+            total_points = sum(p['points'] for p in hyp_picks.values())
+            avg_norm_val = np.mean([p['norm_value'] for p in hyp_picks.values()])
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Points", f"{total_points:.0f}")
+            with col2:
+                st.metric("Avg Norm Value", f"{avg_norm_val:.2f}")
+            with col3:
+                st.metric("Picks Selected", len(hyp_picks))
+            
+            # Show roster table
+            roster_rows = []
+            for round_num in sorted(hyp_picks.keys()):
+                pick = hyp_picks[round_num]
+                roster_rows.append({
+                    'Round': round_num,
+                    'Position': pick['position'],
+                    'Player': pick['player_name'],
+                    'Points': round(pick['points'], 1),
+                    'PPG': round(pick['ppg'], 2),
+                    'Norm Value': round(pick['norm_value'], 2)
+                })
+            
+            roster_df = pd.DataFrame(roster_rows)
+            st.dataframe(roster_df, use_container_width=True, hide_index=True)
+            
+            # Button to save/confirm this hypothetical roster to Current Plan
+            if st.button("📌 Use This Hypothetical Roster on Current Plan"):
+                st.session_state['show_hypothetical_roster'] = True
+                st.success("Hypothetical roster will display on Current Plan page!")
+            
+            if st.button("🗑️ Clear All Selections"):
+                st.session_state['hypothetical_picks'] = {}
+                st.session_state['show_hypothetical_roster'] = False
+                st.rerun()
+        
+        # Reference: Show point range graphs by position
+        with st.expander("📊 Reference: Point Ranges by Round (Tap to expand)"):
+            st.write("*These graphs show all players at each position and which round they're expected to go in.*")
+            
+            # Get positions sorted by best normalized POS Value
+            positions_available = (
+                filtered_players.groupby('position')['POS_Value_Normalized']
+                .max()
+                .sort_values(ascending=False)
+                .index
+            )
+
+            for pos in positions_available:
+                pos_players = filtered_players[filtered_players['position'] == pos].copy()
+                pos_players = pos_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points', 'adp'])
+
+                if pos_players.empty:
+                    continue
+
+                # Calculate which round each player is expected to go (ADP / num_teams ≈ round)
+                # fillna just in case any NaN slipped through
+                pos_players['draft_round'] = np.ceil(pos_players['adp'].fillna(999) / num_teams).astype(int)
+                pos_players['draft_round'] = pos_players['draft_round'].clip(lower=1, upper=21)
+                
+                # Sort by draft round
+                pos_players = pos_players.sort_values('draft_round', ascending=True)
+
+                color = position_colors.get(pos, '#1f77b4')
+
+                fig = go.Figure()
+
+                # For each round, show the range of available players
+                for round_num in sorted(pos_players['draft_round'].unique()):
+                    round_players = pos_players[pos_players['draft_round'] == round_num]
+                    
+                    if round_players.empty:
+                        continue
+                    
+                    # Get min/max points in this round
+                    min_points = round_players['floor'].min()
+                    max_points = round_players['ceiling'].max()
+                    best_points = round_players['points'].max()
+                    worst_points = round_players['points'].min()
+                    
+                    # Create scatter plot for this round with error bars
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[best_points],  # Position dot at best available
+                            y=[f"Round {round_num}"],
+                            mode='markers',
+                            marker=dict(
+                                size=12,
+                                color=color,
+                                line=dict(color='white', width=1.5)
+                            ),
+                            error_x=dict(
+                                type='data',
+                                symmetric=False,
+                                array=[max_points - best_points],  # Ceiling above best
+                                arrayminus=[best_points - min_points],  # Floor below best
+                                color=color,
+                                thickness=2.5,
+                                width=6
+                            ),
+                            customdata=[[
+                                round_players['name_x'].iloc[0],
+                                len(round_players),
+                                worst_points,
+                                best_points,
+                                min_points,
+                                max_points
+                            ]],
+                            hovertemplate=(
+                                "<b>Round %{y}</b><br>"
+                                "Best Available: %{customdata[0][0]}<br>"
+                                "Players in round: %{customdata[0][1]}<br>"
+                                "Point Range: %{customdata[0][4]:.0f} - %{customdata[0][5]:.0f}<br>"
+                                "Expected: %{customdata[0][2]:.0f} - %{customdata[0][3]:.0f}<extra></extra>"
+                            ),
+                            showlegend=False,
+                        )
+                    )
+
+                # Dynamic plot height: one line per round
+                num_rounds = len(pos_players['draft_round'].unique())
+                dynamic_height = max(300, num_rounds * 40 + 100)
+
+                fig.update_layout(
+                    title=dict(
+                        text=f"<b>{pos}</b> — Point Range by Draft Round",
+                        font=dict(size=16)
+                    ),
+                    xaxis_title="Projected Points (Floor to Ceiling)",
+                    yaxis=dict(
+                        type='category',
+                        categoryorder='array',
+                        categoryarray=[f"Round {i}" for i in range(1, 22)],
+                        autorange='reversed',  # Invert so Round 1 is at top
+                        tickfont=dict(size=11),
+                    ),
+                    height=dynamic_height,
+                    template='plotly_white',
+                    margin=dict(l=100, r=40, t=60, b=50),
+                    hoverlabel=dict(bgcolor="white", font_size=12),
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
 
 
 

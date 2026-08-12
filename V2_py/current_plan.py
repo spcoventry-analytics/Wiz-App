@@ -29,6 +29,42 @@ def show_current_plan():
         help="See position priorities for this team"
     )
     
+    # === SHOW HYPOTHETICAL ROSTER IF ENABLED ===
+    if st.session_state.get('show_hypothetical_roster', False) and st.session_state.get('hypothetical_picks'):
+        st.divider()
+        st.write("### 🎯 Hypothetical Draft Plan")
+        
+        hyp_picks = st.session_state['hypothetical_picks']
+        
+        # Display hypothetical roster
+        hyp_rows = []
+        total_hyp_points = 0
+        
+        for round_num in sorted(hyp_picks.keys()):
+            pick = hyp_picks[round_num]
+            hyp_rows.append({
+                'Round': round_num,
+                'Position': pick['position'],
+                'Player': pick['player_name'],
+                'Points': round(pick['points'], 1),
+                'PPG': round(pick['ppg'], 2),
+                'Norm Value': round(pick['norm_value'], 2)
+            })
+            total_hyp_points += pick['points']
+        
+        hyp_df = pd.DataFrame(hyp_rows)
+        st.dataframe(hyp_df, use_container_width=True, hide_index=True)
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Points (Hyp)", f"{total_hyp_points:.0f}")
+        with col2:
+            st.metric("Picks in Plan", len(hyp_picks))
+        with col3:
+            st.metric("Avg Norm Value", f"{np.mean([p['norm_value'] for p in hyp_picks.values()]):.2f}")
+        
+        st.divider()
+    
     # Get picks made by this team
     team_picks = player_data_all[(player_data_all['pick_number'] > 0) & (player_data_all['owner'] == team_to_analyze)]
     
