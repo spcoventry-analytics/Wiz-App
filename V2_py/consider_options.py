@@ -55,21 +55,24 @@ def show_consider_options():
     available_positions = available_players.groupby('position')['POS_Value'].max().sort_values(ascending=False)
     position_order = [""] + list(available_positions.index)
     
-    st.write("### Filter Players:")
+    st.write("### Filter Players (Optional):")
     
-    default_position = st.session_state.get('consider_filter_position', '')
-    position = st.radio(
-        "Position (optional)", 
-        position_order, 
-        horizontal=True, 
-        index=position_order.index(default_position) if default_position in position_order else 0
-    )
+    col_filt1, col_filt2 = st.columns(2)
     
-    # Clear the filter after using it once
-    if 'consider_filter_position' in st.session_state:
-        del st.session_state['consider_filter_position']
+    with col_filt1:
+        default_position = st.session_state.get('consider_filter_position', '')
+        position = st.selectbox(
+            "Position (optional)", 
+            position_order, 
+            index=position_order.index(default_position) if default_position in position_order else 0
+        )
+        
+        # Clear the filter after using it once
+        if 'consider_filter_position' in st.session_state:
+            del st.session_state['consider_filter_position']
     
-    team = st.selectbox("NFL Team (optional)", [""] + sorted(list(available_players["team_x"].unique().astype(str))))
+    with col_filt2:
+        team = st.selectbox("NFL Team (optional)", [""] + sorted(list(available_players["team_x"].unique().astype(str))))
 
     # Apply filters
     filtered_players = available_players.copy()
@@ -83,6 +86,41 @@ def show_consider_options():
     
     # === TAB 1: GOLD MINE GRAPHS (POSITION-GROUPED) ===
     with tab_graph:
+        
+        # === CALCULATE ROUND REFERENCE LINES ===
+        # Rank offensive players by ADP to show round boundaries
+        offensive_positions = ['QB', 'RB', 'WR', 'TE']
+        offensive_players = available_players[available_players['position'].isin(offensive_positions)].copy()
+        offensive_players = offensive_players.dropna(subset=['adp', 'points']).copy()
+        
+        if not offensive_players.empty:
+            # Sort by ADP (lowest = earliest pick) and add overall rank
+            offensive_players = offensive_players.sort_values('adp', ascending=True).reset_index(drop=True)
+            offensive_players['overall_rank'] = range(1, len(offensive_players) + 1)
+            offensive_players['draft_round'] = (np.ceil(offensive_players['overall_rank'] / num_teams)).fillna(1).astype(int)
+            
+            # Calculate average points at each round boundary
+            round_lines = {}
+            for round_num in range(1, 22):
+                round_players = offensive_players[offensive_players['draft_round'] == round_num]
+                if not round_players.empty:
+                    avg_points = round_players['points'].mean()
+                    round_lines[round_num] = avg_points
+        else:
+            round_lines = {}
+        
+        # Calculate max round globally (for consistent coloring across positions)
+        global_max_round = max(offensive_players['draft_round'].unique()) if not offensive_players.empty else 1
+        
+        # Color scale for rounds (cycle through a gradient)
+        import colorsys
+        def get_round_color(round_num, opacity=0.12):
+            """Generate a color based on round number with consistent global scale"""
+            hue = (round_num - 1) / max(global_max_round, 1)  # 0 to 1
+            saturation = 0.5
+            value = 0.85
+            r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
+            return f"rgba({int(r*255)}, {int(g*255)}, {int(b*255)}, {opacity})"
         
         # Get positions sorted by best normalized POS Value
         positions_available = (
@@ -103,6 +141,25 @@ def show_consider_options():
             pos_players = pos_players.sort_values('POS_Value_Normalized', ascending=False).head(10)
             # Sort by ADP for display
             pos_players = pos_players.sort_values('adp', ascending=True)
+            
+            # Add draft round for each player
+            # First try to merge with offensive_players (which has draft_round calculated)
+            if not offensive_players.empty and 'espn_id' in pos_players.columns and 'espn_id' in offensive_players.columns:
+                pos_players = pos_players.merge(
+                    offensive_players[['espn_id', 'draft_round']],
+                    on='espn_id',
+                    how='left',
+                    suffixes=('', '_off')
+                )
+            
+            # If merge didn't work or column missing, calculate draft_round from ADP
+            if 'draft_round' not in pos_players.columns:
+                pos_players['draft_round'] = (np.ceil(pos_players['adp'] / num_teams)).fillna(1).astype(int)
+            else:
+                # Fill any NaN values with calculated round
+                pos_players['draft_round'] = pos_players['draft_round'].fillna(
+                    (np.ceil(pos_players['adp'] / num_teams)).fillna(1).astype(int)
+                )
 
             color = position_colors.get(pos, '#1f77b4')
 
@@ -152,6 +209,25 @@ def show_consider_options():
                     showlegend=False,
                 )
             )
+            
+            # Add horizontal lines between rounds (simplified)
+            current_round = None
+            
+            for idx, (_, row) in enumerate(pos_players.iterrows()):
+                player_round = int(row['draft_round'])
+                
+                if current_round is not None and player_round != current_round:
+                    # Round changed - add a simple horizontal divider line
+                    y_line = idx - 0.5
+                    fig.add_hline(
+                        y=y_line,
+                        line_dash="solid",
+                        line_color="rgba(150, 150, 150, 0.5)",
+                        line_width=2,
+                        layer="below"
+                    )
+                
+                current_round = player_round
 
             # Dynamic plot height
             dynamic_height = max(300, len(pos_players) * 45 + 100)
@@ -164,7 +240,7 @@ def show_consider_options():
                 xaxis_title="Projected Points (Floor to Ceiling)",
                 yaxis=dict(
                     type='category',
-                    autorange=True,
+                    autorange='reversed',  # Best players at top
                     tickfont=dict(size=12),
                 ),
                 height=dynamic_height,
@@ -173,7 +249,28 @@ def show_consider_options():
                 hoverlabel=dict(bgcolor="white", font_size=12),
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            # Create layout with graph and control button
+            col_graph, col_control = st.columns([4, 1])
+            
+            with col_graph:
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col_control:
+                st.write("")  # Spacing
+                st.write("")
+                st.write("**Target Round:**")
+                target_round = st.selectbox(
+                    f"Select round for {pos}",
+                    ["—", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+                    key=f"gold_mine_round_{pos}",
+                    label_visibility="collapsed"
+                )
+                
+                if target_round != "—":
+                    if st.button(f"📌 Target {pos} R{target_round}", use_container_width=True, key=f"btn_target_{pos}"):
+                        st.session_state[f"round_{target_round}_pos"] = pos
+                        st.success(f"Round {target_round} set to {pos}! Go to Strategy tab to see the player.")
+                        st.rerun()
     
     # === TAB 2: FULL PLAYER DETAILS TABLE ===
     with tab_table:
@@ -421,7 +518,28 @@ def show_consider_options():
                     hoverlabel=dict(bgcolor="white", font_size=12),
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                # Create layout with graph and control button
+                col_graph, col_control = st.columns([4, 1])
+                
+                with col_graph:
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_control:
+                    st.write("")  # Spacing
+                    st.write("")
+                    st.write("**Quick Target:**")
+                    quick_round = st.selectbox(
+                        f"Quick select round for {pos}",
+                        ["—", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+                        key=f"ref_round_{pos}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if quick_round != "—":
+                        if st.button(f"📌 Target {pos} R{quick_round}", use_container_width=True, key=f"btn_ref_target_{pos}"):
+                            st.session_state[f"round_{quick_round}_pos"] = pos
+                            st.success(f"Round {quick_round} set to {pos}! Go to Strategy tab to see the player.")
+                            st.rerun()
 
 
 
