@@ -14,9 +14,46 @@
     "Stripped Balls and Tight Ends"],
   "my_team": "TD Grab",
   "current_plan": {
+    "keepers": {
+      "TD Grab": [
+        {"pick": 6, "player": "Derrick Henry", "position": "RB"},
+        {"pick": 15, "player": "Cedric Gray", "position": "LB"}
+      ],   
+      "Gridiron Elite": [
+        {"pick": 9, "player": "James Cook III", "position": "RB"},
+        {"pick": 12, "player": "Foyesade Oluokun", "position": "LB"}
+      ],
+      "Adam's Family": [
+        {"pick": 8, "player": "Jonathan Taylor", "position": "RB"},
+        {"pick": 13, "player": "Byron Young", "position": "UNK"}
+      ],
+      "Who Dey and The Blowfish": [
+        {"pick": 2, "player": "De'Von Achane", "position": "RB"},
+        {"pick": 19, "player": "Jack Campbell", "position": "LB"}
+      ],
+      "ROOKIES AND BITCHES": [
+        {"pick": 4, "player": "Bucky Irving", "position": "RB"},
+        {"pick": 17, "player": "Andrew Van Ginkel", "position": "DL"}
+      ],
+      "Straight Cash Homie": [
+        {"pick": 7, "player": "Jaxon Smith-Njigba", "position": "WR"},
+        {"pick": 14, "player": "Jeffery Simmons", "position": "DL"}
+      ],
+      "Balls Deep": [
+
+      ],
+      "Daytrippin  Raiders": [
+        {"pick": 1, "player": "Chase Brown", "position": "RB"},
+        {"pick": 20, "player": "Travis Hunter", "position": "WR"}
+      ],
+      "#HereWeGo": [
+
+      ],
+      "Stripped Balls and Tight Ends": [
+
+      ]
+    },
     "drafted_players": [
-      {"pick": 6, "player": "Derrick Henry", "position": "RB"},
-      {"pick": 15, "player": "LB Name", "position": "LB"}
     ],
     "planned_picks": [
       {"round": 3, "position": "RB"},
