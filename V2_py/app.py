@@ -141,13 +141,13 @@ def calculate_tier_baselines():
         tier_baselines[pos] = {}
         
         for tier_num in range(slot_counts.get(pos, 0)):
-            # Get the PPG of the worst starter in this tier across all teams
+            # Get the average PPG for this tier (league average if distributed one per team)
             tier_start_idx = tier_num * num_teams
             tier_end_idx = (tier_num + 1) * num_teams
             tier_players = pos_players.iloc[tier_start_idx:tier_end_idx]
             
             if not tier_players.empty:
-                baseline_ppg = tier_players['PPG'].min()
+                baseline_ppg = tier_players['PPG'].mean()
                 tier_baselines[pos][tier_num] = baseline_ppg
             else:
                 tier_baselines[pos][tier_num] = 0

@@ -20,12 +20,12 @@ def show_current_plan():
         return
     
     # === CREATE TABS: BUILD PLAN vs SCARCITY vs STRATEGY ===
-    tab_build, tab_scarcity, tab_strategy = st.tabs(["🎯 Build Plan (Round Strategy)", "📊 Position Scarcity", "🔍 Build a Strategy"])
+    tab_scarcity, tab_build, tab_strategy = st.tabs(["📊 Position Scarcity", "🎯 Build Plan (Round Strategy)", "🔍 Build a Strategy"])
     
     # ============================================================================
-    # === TAB 1: BUILD PLAN (ROUND STRATEGY) ===
+    # === TAB 1: POSITION SCARCITY (RESTORED FROM OLD VERSION) ===
     # ============================================================================
-    with tab_build:
+    with tab_scarcity:
         st.write("**Build Your Draft Plan - Select Position for Each Round**")
         st.write("*For each round, select which position to draft. See the expected player and points.*")
         
@@ -138,10 +138,10 @@ def show_current_plan():
                 st.rerun()
     
     # ============================================================================
-    # === TAB 2: POSITION SCARCITY (RESTORED FROM OLD VERSION) ===
+    # === TAB 2: BUILD PLAN (ROUND STRATEGY) ===
     # ============================================================================
-    with tab_scarcity:
-        st.write("**Position Scarcity Analysis**")
+    with tab_build:
+        st.write("**Position Scarcity Analysis** — Your Team's Draft Urgency")
         
         # Debug: show slot_counts for troubleshooting
         with st.expander("🔧 Debug: League Configuration"):
@@ -149,15 +149,11 @@ def show_current_plan():
             st.write(f"**num_teams:** {num_teams}")
             st.write(f"**tier_baselines keys:** {list(tier_baselines.keys())}")
         
-        # Team selector
-        team_to_analyze = st.selectbox(
-            "Select team to analyze",
-            draft_order,
-            index=draft_order.index(your_team_default) if your_team_default in draft_order else 0,
-            help="See position priorities for this team"
-        )
+        # Always analyze YOUR TEAM
+        team_to_analyze = st.session_state.get('my_team', your_team_default)
+        st.caption(f"📍 Analyzing: **{team_to_analyze}**")
         
-        # Get picks made by this team
+        # Get picks made by your team
         team_picks = player_data_all[(player_data_all['pick_number'] > 0) & (player_data_all['owner'] == team_to_analyze)]
         
         # Count filled slots by position (BASE positions only, not including FLEX)
@@ -225,6 +221,16 @@ def show_current_plan():
                 if best_available is not None:
                     best_available_value = best_available['PPG'] - tier_baseline
                 
+                # Calculate ELASTICITY: value cost if we wait one round
+                # (how much PPG do we lose by skipping this position now?)
+                next_round_available = pos_players.iloc[num_teams] if len(pos_players) > num_teams else None
+                elasticity = 0
+                if best_available is not None and next_round_available is not None:
+                    elasticity = round(best_available['PPG'] - next_round_available['PPG'], 1)
+                elif best_available is not None and len(pos_players) > 0:
+                    # If not enough players for full round, use average drop to next available
+                    elasticity = round(best_available['PPG'] - pos_players.iloc[min(1, len(pos_players)-1)]['PPG'], 1)
+                
                 # ADP-aware scarcity: only count drafted players with ADP <= best_available's ADP
                 adp_aware_drafted = 0
                 if best_available is not None and pd.notna(best_available.get('adp')):
@@ -238,10 +244,29 @@ def show_current_plan():
                 else:
                     scarcity_ratio = 0
                 
-                # Urgency: combines slot needs + scarcity
-                urgency_score = (empty_slots / total_slots if total_slots > 0 else 0) + (scarcity_ratio * 0.5)
-                if empty_slots > 0 and available_above_tier <= empty_slots:
-                    urgency_score += 1.0  # CRITICAL if not enough starters
+                # Urgency: PRIMARY = Elasticity (value cliff), SECONDARY = empty slots needed
+                # High elasticity means steep drop-off if you wait → CRITICAL
+                # Low elasticity means gentle drop-off → can afford to wait
+                
+                if elasticity > 5.0 and empty_slots > 0:
+                    # High cliff + need to fill slots = CRITICAL
+                    urgency_score = 2.5
+                elif elasticity > 3.0 and empty_slots > 0:
+                    # Steep cliff + need to fill = HIGH
+                    urgency_score = 1.5
+                elif elasticity > 1.5 and empty_slots > 0:
+                    # Moderate cliff + need to fill = MEDIUM
+                    urgency_score = 1.0
+                elif elasticity > 0.5 and empty_slots > 0:
+                    # Gentle cliff + need to fill = LOW but watch
+                    urgency_score = 0.5
+                else:
+                    # Very flat cliff or no needs = RELAXED
+                    urgency_score = 0.2
+                
+                # Also factor in scarcity: if running out of starters, boost urgency
+                if available_above_tier <= empty_slots:
+                    urgency_score += 0.8  # Running out of starters - boost priority
                 
                 # Always show position (not filtered by urgency), prioritized in sorted table
                 position_analysis.append({
@@ -253,6 +278,7 @@ def show_current_plan():
                     'Best Available': best_available['name_x'] if best_available is not None else 'NONE',
                     'PPG': round(best_available['PPG'], 1) if best_available is not None else 0,
                     'Value': round(best_available_value, 1),
+                    'Elasticity': elasticity,  # PPG cost if you wait 1 round
                     'ADP': round(best_available['adp'], 0) if best_available is not None and pd.notna(best_available.get('adp')) else 'N/A',
                     'Starters Left': available_above_tier,
                     'Drafted (ADP≤Best)': adp_aware_drafted,
@@ -264,6 +290,13 @@ def show_current_plan():
             if not position_analysis:
                 st.warning(f"⚠️ No position data found. slot_counts keys: {list(slot_counts.keys())}")
             else:
+                # Debug: show what was calculated for each position
+                with st.expander("🔧 Debug: Position Analysis Data"):
+                    st.write(f"**Tier Baselines loaded:** {tier_baselines.keys()}")
+                    st.write(f"**Position Analysis entries:** {len(position_analysis)}")
+                    for item in position_analysis:
+                        st.write(f"**{item['Position']}**: Baseline={item['Baseline']}, Best={item['Best Available']}, PPG={item['PPG']}, Value={item['Value']}, Elasticity={item['Elasticity']}, Urgency={item['Urgency']:.2f}, Slots={item['Slots']}, Tier={item['Tier']}")
+                
                 # Sort by urgency (highest first = most critical to address)
                 position_priority = pd.DataFrame(position_analysis).sort_values('Urgency', ascending=False)
                 
@@ -288,21 +321,22 @@ def show_current_plan():
                     
                     with col1:
                         st.markdown(f"<div style='background-color:{pos_color}; padding:8px; border-radius:4px; text-align:center; font-weight:bold; color:white;'>{row['Position']}</div>", unsafe_allow_html=True)
-                
-                with col2:
-                    st.write(f"**{row['Best Available']}** | {row['PPG']} PPG")
-                    st.write(f"*Value: {row['Value']:+.1f} | Tier {int(row['Tier'])} base: {row['Baseline']}*")
-                
-                with col3:
-                    st.write(f"Slots: {row['Slots']}")
-                    st.write(f"Starters: {row['Starters Left']} | Scarcity: {row['Scarcity %']}")
-                
-                with col4:
-                    st.write(priority_level)
-                
-                with col5:
-                    if st.button("📊", key=f"view_{row['Position']}_{idx}", help="View players at this position"):
-                        pass  # Placeholder for view action
+                    
+                    with col2:
+                        st.write(f"**{row['Best Available']}** | {row['PPG']} PPG")
+                        elasticity_text = f"Elasticity: {row['Elasticity']:.1f}" if row['Elasticity'] > 0 else "Elasticity: N/A"
+                        st.write(f"*Value: {row['Value']:+.1f} | Tier {int(row['Tier'])} base: {row['Baseline']} | {elasticity_text}*")
+                    
+                    with col3:
+                        st.write(f"Slots: {row['Slots']}")
+                        st.write(f"Starters: {row['Starters Left']} | Scarcity: {row['Scarcity %']}")
+                    
+                    with col4:
+                        st.write(priority_level)
+                    
+                    with col5:
+                        if st.button("📊", key=f"view_{row['Position']}_{idx}", help="View players at this position"):
+                            pass  # Placeholder for view action
             
                 # Show team's current roster (actual picks made)
                 st.divider()
@@ -388,7 +422,7 @@ def show_current_plan():
     # ============================================================================
     with tab_strategy:
         st.write("**Strategy Builder: Point Ranges by Draft Round**")
-        st.write("*See how points per player vary by draft round for each position. This helps set your round targets.*")
+        st.write("*See how points per player vary by draft round for each position. Select target rounds for your strategy.*")
         
         # Get available players
         available_players_strat = player_data_all[player_data_all["pick_number"] == 0].copy()
@@ -423,82 +457,105 @@ def show_current_plan():
                 
                 color = position_colors.get(pos, '#1f77b4')
                 
-                fig = go.Figure()
+                # Create layout: graph on left, round selector on right
+                col_graph, col_control = st.columns([4, 1])
                 
-                # For each round, show the range of available players
-                for round_num in sorted(pos_players['draft_round'].unique()):
-                    round_players = pos_players[pos_players['draft_round'] == round_num]
+                with col_graph:
+                    fig = go.Figure()
                     
-                    if round_players.empty:
-                        continue
-                    
-                    # Get min/max points in this round
-                    min_points = round_players['floor'].min()
-                    max_points = round_players['ceiling'].max()
-                    best_points = round_players['points'].max()
-                    worst_points = round_players['points'].min()
-                    
-                    # Create scatter plot for this round with error bars
-                    fig.add_trace(
-                        go.Scatter(
-                            x=[best_points],  # Position dot at best available
-                            y=[f"Round {round_num}"],
-                            mode='markers',
-                            marker=dict(
-                                size=12,
-                                color=color,
-                                line=dict(color='white', width=1.5)
-                            ),
-                            error_x=dict(
-                                type='data',
-                                symmetric=False,
-                                array=[max_points - best_points],  # Ceiling above best
-                                arrayminus=[best_points - min_points],  # Floor below best
-                                color=color,
-                                thickness=2.5,
-                                width=6
-                            ),
-                            customdata=[[
-                                round_players['name_x'].iloc[0],
-                                len(round_players),
-                                worst_points,
-                                best_points,
-                                min_points,
-                                max_points
-                            ]],
-                            hovertemplate=(
-                                "<b>Round %{y}</b><br>"
-                                "Best Available: %{customdata[0][0]}<br>"
-                                "Players in round: %{customdata[0][1]}<br>"
-                                "Point Range: %{customdata[0][4]:.0f} - %{customdata[0][5]:.0f}<br>"
-                                "Expected: %{customdata[0][2]:.0f} - %{customdata[0][3]:.0f}<extra></extra>"
-                            ),
-                            showlegend=False,
+                    # For each round, show the range of available players
+                    for round_num in sorted(pos_players['draft_round'].unique()):
+                        round_players = pos_players[pos_players['draft_round'] == round_num]
+                        
+                        if round_players.empty:
+                            continue
+                        
+                        # Get min/max points in this round
+                        min_points = round_players['floor'].min()
+                        max_points = round_players['ceiling'].max()
+                        best_points = round_players['points'].max()
+                        worst_points = round_players['points'].min()
+                        
+                        # Create scatter plot for this round with error bars
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[best_points],  # Position dot at best available
+                                y=[f"Round {round_num}"],
+                                mode='markers',
+                                marker=dict(
+                                    size=12,
+                                    color=color,
+                                    line=dict(color='white', width=1.5)
+                                ),
+                                error_x=dict(
+                                    type='data',
+                                    symmetric=False,
+                                    array=[max_points - best_points],  # Ceiling above best
+                                    arrayminus=[best_points - min_points],  # Floor below best
+                                    color=color,
+                                    thickness=2.5,
+                                    width=6
+                                ),
+                                customdata=[[
+                                    round_players['name_x'].iloc[0],
+                                    len(round_players),
+                                    worst_points,
+                                    best_points,
+                                    min_points,
+                                    max_points
+                                ]],
+                                hovertemplate=(
+                                    "<b>Round %{y}</b><br>"
+                                    "Best Available: %{customdata[0][0]}<br>"
+                                    "Players in round: %{customdata[0][1]}<br>"
+                                    "Point Range: %{customdata[0][4]:.0f} - %{customdata[0][5]:.0f}<br>"
+                                    "Expected: %{customdata[0][2]:.0f} - %{customdata[0][3]:.0f}<extra></extra>"
+                                ),
+                                showlegend=False,
+                            )
                         )
+                    
+                    # Dynamic plot height: one line per round
+                    num_rounds = len(pos_players['draft_round'].unique())
+                    dynamic_height = max(300, num_rounds * 40 + 100)
+                    
+                    fig.update_layout(
+                        title=dict(
+                            text=f"<b>{pos}</b> — Point Range by Draft Round",
+                            font=dict(size=16)
+                        ),
+                        xaxis_title="Projected Points (Floor to Ceiling)",
+                        yaxis=dict(
+                            type='category',
+                            categoryorder='array',
+                            categoryarray=[f"Round {i}" for i in range(1, 22)],
+                            autorange='reversed',  # Invert so Round 1 is at top
+                            tickfont=dict(size=11),
+                        ),
+                        height=dynamic_height,
+                        template='plotly_white',
+                        margin=dict(l=100, r=40, t=60, b=50),
+                        hoverlabel=dict(bgcolor="white", font_size=12),
                     )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                # Dynamic plot height: one line per round
-                num_rounds = len(pos_players['draft_round'].unique())
-                dynamic_height = max(300, num_rounds * 40 + 100)
-                
-                fig.update_layout(
-                    title=dict(
-                        text=f"<b>{pos}</b> — Point Range by Draft Round",
-                        font=dict(size=16)
-                    ),
-                    xaxis_title="Projected Points (Floor to Ceiling)",
-                    yaxis=dict(
-                        type='category',
-                        categoryorder='array',
-                        categoryarray=[f"Round {i}" for i in range(1, 22)],
-                        autorange='reversed',  # Invert so Round 1 is at top
-                        tickfont=dict(size=11),
-                    ),
-                    height=dynamic_height,
-                    template='plotly_white',
-                    margin=dict(l=100, r=40, t=60, b=50),
-                    hoverlabel=dict(bgcolor="white", font_size=12),
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
+                with col_control:
+                    st.write("")  # Spacing
+                    st.write("**📌 Target Rounds:**")
+                    available_rounds = sorted(pos_players['draft_round'].unique())
+                    target_rounds = st.multiselect(
+                        f"Select rounds for {pos}",
+                        available_rounds,
+                        default=st.session_state.get(f'target_rounds_{pos}', []),
+                        key=f"target_rounds_{pos}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if target_rounds:
+                        st.session_state[f'target_rounds_{pos}'] = target_rounds
+                        st.success(f"🎯 {pos} targets: Rounds {', '.join(map(str, sorted(target_rounds)))}")
+                    else:
+                        st.caption("Select rounds ↑")
+    
     
