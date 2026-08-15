@@ -20,14 +20,30 @@ def show_current_plan():
         return
     
     # === CREATE TABS: BUILD PLAN vs SCARCITY vs STRATEGY ===
-    tab_scarcity, tab_build, tab_strategy = st.tabs(["📊 Position Scarcity", "🎯 Build Plan (Round Strategy)", "🔍 Build a Strategy"])
+    tab_scarcity, tab_strategy, tab_build = st.tabs(["📊 Position Scarcity", "🔍 Build a Strategy", "🎯 Build Plan"])
     
     # ============================================================================
-    # === TAB 1: POSITION SCARCITY (RESTORED FROM OLD VERSION) ===
+    # === TAB 3: BUILD PLAN (ROUND STRATEGY) ===
     # ============================================================================
-    with tab_scarcity:
-        st.write("**Build Your Draft Plan - Select Position for Each Round**")
-        st.write("*For each round, select which position to draft. See the expected player and points.*")
+    with tab_build:
+        st.write("**Build Your Draft Plan - Execute Strategy**")
+        st.write("*Review your strategy targets and confirm the position to draft each round.*")
+        
+        # Show strategy targets from Build a Strategy tab
+        strategy_targets = {}
+        for pos in ['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DB']:
+            target_rounds = st.session_state.get(f'target_rounds_{pos}', [])
+            if target_rounds:
+                strategy_targets[pos] = sorted(target_rounds)
+        
+        if strategy_targets:
+            st.info("📌 **Strategy Targets** (from Build a Strategy tab):")
+            for pos, rounds in sorted(strategy_targets.items(), key=lambda x: x[1][0] if x[1] else 99):
+                st.caption(f"  🎯 **{pos}**: Rounds {', '.join(map(str, rounds))}")
+        else:
+            st.caption("💡 No strategy targets set yet. Go to 'Build a Strategy' tab to set position targets for specific rounds.")
+        
+        st.divider()
         
         # Initialize hypothetical picks in session state if not present
         if 'hypothetical_picks' not in st.session_state:
@@ -138,9 +154,9 @@ def show_current_plan():
                 st.rerun()
     
     # ============================================================================
-    # === TAB 2: BUILD PLAN (ROUND STRATEGY) ===
+    # === TAB 1: POSITION SCARCITY ===
     # ============================================================================
-    with tab_build:
+    with tab_scarcity:
         st.write("**Position Scarcity Analysis** — Your Team's Draft Urgency")
         
         # Debug: show slot_counts for troubleshooting
@@ -418,7 +434,7 @@ def show_current_plan():
                     st.write(f"No picks made yet.")
     
     # ============================================================================
-    # === TAB 3: BUILD A STRATEGY (POINT RANGES BY ROUND - FROM OLD CONSIDER_OPTIONS) ===
+    # === TAB 2: BUILD A STRATEGY (POINT RANGES BY ROUND - FROM OLD CONSIDER_OPTIONS) ===
     # ============================================================================
     with tab_strategy:
         st.write("**Strategy Builder: Point Ranges by Draft Round**")
@@ -553,7 +569,6 @@ def show_current_plan():
                     )
                     
                     if target_rounds:
-                        st.session_state[f'target_rounds_{pos}'] = target_rounds
                         st.success(f"🎯 {pos} targets: Rounds {', '.join(map(str, sorted(target_rounds)))}")
                     else:
                         st.caption("Select rounds ↑")
