@@ -36,6 +36,48 @@ def load_config_on_startup():
         st.session_state['current_config_file'] = None  # Will be set after finding matching draft file
         st.session_state['current_plan'] = config.get('current_plan', {})
         st.session_state['config_loaded'] = True
+        
+        # Fetch ESPN league info to populate slot_counts, position_colors, tier_baselines
+        try:
+            espn_s2 = st.secrets.get("stephen_espn_s2")
+            swid = st.secrets.get("stephen_swid")
+            
+            if espn_s2 and swid:
+                league = League(league_id=int(league_info['league_id']), year=int(league_info['season_id']), espn_s2=espn_s2, swid=swid)
+                
+                # Extract slot_counts from league.settings.position_slot_counts
+                # Using same logic as configuration.py: separate FLEX from regular positions
+                if hasattr(league.settings, 'position_slot_counts'):
+                    position_slot_counts = league.settings.position_slot_counts
+                    
+                    # Separate FLEX positions (contain "/") from regular positions
+                    slot_counts = {}
+                    flex_positions = {}
+                    
+                    for pos, count in position_slot_counts.items():
+                        if count > 0 and pos not in ["BN", "BE", "IR", ""]:
+                            if "/" in pos:  # FLEX position
+                                flex_positions[pos] = count
+                            else:  # Regular position
+                                slot_counts[pos] = count
+                    
+                    st.session_state['slot_counts'] = slot_counts
+                    st.session_state['flex_positions'] = flex_positions
+                
+                # Set up position colors (user's preferred scheme)
+                position_colors = {
+                    'QB': '#669bbc', 'RB': '#588157', 'WR': '#005D8F', 'TE': '#335c67',
+                    'DL': '#ee9b00', 'LB': '#ca6702', 'CB': '#bb3e03', 'DB': '#bb3e03',
+                    'DEF': '#ca6702', 'K': '#888888'
+                }
+                st.session_state['position_colors'] = position_colors
+                
+                # Calculate tier baselines from league settings
+                # Placeholder: will be calculated during draft_board init
+                st.session_state['tier_baselines'] = {}
+        except Exception as e:
+            # If ESPN fetch fails, continue without slot_counts (tabs will show error)
+            pass
 
 # Auto-resume existing draft on startup
 def auto_resume_existing_draft():
@@ -70,8 +112,47 @@ def auto_resume_existing_draft():
         if len(parts) >= 2:
             st.session_state['league_id'] = parts[0]
             st.session_state['season_id'] = parts[1]
+        
+        # Calculate tier baselines from player data
+        calculate_tier_baselines()
     except Exception as e:
         st.warning(f"Could not auto-resume draft from {latest_file}: {e}")
+
+def calculate_tier_baselines():
+    """Calculate PPG baseline for each position tier based on slot_counts and player data."""
+    player_data = st.session_state.get('player_data_all')
+    slot_counts = st.session_state.get('slot_counts', {})
+    num_teams = len(st.session_state.get('draft_order', []))
+    
+    if player_data is None or player_data.empty or not slot_counts or num_teams == 0:
+        st.session_state['tier_baselines'] = {}
+        return
+    
+    tier_baselines = {}
+    
+    for pos in slot_counts.keys():
+        # Skip non-positions
+        if pos in ["IR", "", "FLEX", "BENCH", "BE"] or "/" in pos:
+            continue
+        
+        num_starting_slots = slot_counts.get(pos, 0) * num_teams
+        pos_players = player_data[player_data['position'] == pos].sort_values('PPG', ascending=False)
+        
+        tier_baselines[pos] = {}
+        
+        for tier_num in range(slot_counts.get(pos, 0)):
+            # Get the PPG of the worst starter in this tier across all teams
+            tier_start_idx = tier_num * num_teams
+            tier_end_idx = (tier_num + 1) * num_teams
+            tier_players = pos_players.iloc[tier_start_idx:tier_end_idx]
+            
+            if not tier_players.empty:
+                baseline_ppg = tier_players['PPG'].min()
+                tier_baselines[pos][tier_num] = baseline_ppg
+            else:
+                tier_baselines[pos][tier_num] = 0
+    
+    st.session_state['tier_baselines'] = tier_baselines
 
 # Load config and draft in order
 load_config_on_startup()
@@ -101,12 +182,6 @@ selected = option_menu(
         "nav-link-selected": {"background-color": "#e0e0e0"},
     }
 )
-
-st.session_state['position_colors'] = {
-    "QB": "#336699", "RB": "#9ee493", "WR": "#86bbd8", "TE": "#2f4858", 
-    "DL": "#7d82b8", "LB": "#613f75", "DB": "#e5c3d1", "Def": "#babd8d", 
-    "K": "#5465ff"}
-
 
 # Display content based on menu selection with Enter Pick toggle
 if 'show_enter_pick' not in st.session_state:
