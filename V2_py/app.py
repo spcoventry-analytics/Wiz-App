@@ -11,11 +11,31 @@ from enter_pick import show_enter_pick
 from consider_options import show_consider_options
 from current_plan import show_current_plan
 from configuration import show_configuration
+from config_manager import ConfigManager
 
 from espn_api.football import League
 
 # Set page config for mobile friendliness
 st.set_page_config(page_title="Fantasy Football Draft Board", layout="wide")
+
+# Load config on startup
+def load_config_on_startup():
+    """Load the latest config file and populate session state."""
+    if st.session_state.get('config_loaded', False):
+        return  # Already loaded
+    
+    config = ConfigManager.get_latest_config()
+    if config:
+        league_info = ConfigManager.extract_league_info(config)
+        st.session_state['league_id'] = league_info['league_id']
+        st.session_state['season_id'] = league_info['season_id']
+        st.session_state['teams'] = league_info['draft_order']
+        st.session_state['my_team'] = league_info['my_team']
+        st.session_state['draft_order'] = league_info['draft_order']
+        st.session_state['keepers'] = league_info['keepers']
+        st.session_state['current_config_file'] = None  # Will be set after finding matching draft file
+        st.session_state['current_plan'] = config.get('current_plan', {})
+        st.session_state['config_loaded'] = True
 
 # Auto-resume existing draft on startup
 def auto_resume_existing_draft():
@@ -53,7 +73,8 @@ def auto_resume_existing_draft():
     except Exception as e:
         st.warning(f"Could not auto-resume draft from {latest_file}: {e}")
 
-# Call auto-resume before rendering anything
+# Load config and draft in order
+load_config_on_startup()
 auto_resume_existing_draft()
 
 # Icon-based menu bar across the top

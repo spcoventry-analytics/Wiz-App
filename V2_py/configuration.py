@@ -1,308 +1,563 @@
-# configuration.py
+﻿# configuration.py
 import streamlit as st
 import pandas as pd
-import requests
-import time
 import json
-import nfl_data_py as nfl
-
-from bs4 import BeautifulSoup
+from config_manager import ConfigManager
 from espn_api.football import League
 
 
 def show_configuration():
     st.title("Configuration")
-    st.write("Select your league, user, and season. View the ESPN API credentials from Streamlit secrets.")
-
-    st.markdown("""
-    **ESPN API Setup**
-    https://www.pro-football-reference.com/
-    https://apps.fantasyfootballanalytics.net/
-    """)
-
-    family_users = ["stephen", "courtney", "adrianne", "beka", "patric", "evi", "victoria"]
-
-    league_options = {
-        "Cujos League": {
-            "league_id": st.secrets.get("cujos_league_id", ""),
-            "espn_s2": st.secrets.get("stephen_espn_s2", ""),
-            "swid": st.secrets.get("stephen_swid", "")
-        },
-        "Family League": None  # Will be set below
-    }
-
-    selected_league = st.selectbox("Select League", list(league_options.keys()))
-
-    if selected_league == "Family League":
-        selected_user = st.selectbox("Select User", family_users)
-        creds = {
-            "league_id": st.secrets.get("family_league_id", ""),
-            "espn_s2": st.secrets.get(f"{selected_user}_espn_s2", ""),
-            "swid": st.secrets.get(f"{selected_user}_swid", "")
-        }
-    else:
-        creds = league_options[selected_league]
-
-    season_id = st.text_input("Season ID (Year)", value="2025", help="Enter the fantasy football season year.")
-
-    st.write(f"**League ID:** {creds['league_id']}")
-    st.write(f"**Season ID:** {season_id}")
-
-    # Store selected league/user/season in session state for use elsewhere
-    st.session_state['league_id'] = creds['league_id']
-    st.session_state['espn_s2'] = creds['espn_s2']
-    st.session_state['swid'] = creds['swid']
-    st.session_state['season_id'] = season_id
-
-    # Fetch and display league name using espn-api package
-    try:
-        from espn_api.football import League
-        league = League(
-            league_id=creds['league_id'],
-            year=int(season_id),
-            espn_s2=creds['espn_s2'],
-            swid=creds['swid']
-        )
-        league_name = getattr(league.settings, 'name', None)
-        teams = [team.team_name for team in league.teams]
-
-        # Calculate draft rounds from position_slot_counts
-        slot_counts = getattr(league.settings, 'position_slot_counts', {})
-        num_rounds = sum(
-            v for k, v in slot_counts.items() if k not in ["IR", ""]
-        )
-        st.session_state['teams'] = teams
-        st.session_state['num_rounds'] = num_rounds
-        st.session_state['slot_counts'] = slot_counts
-        
-        if league_name:
-            st.success(f"Connected to league: {league_name}")
-            st.write("### Teams in this league:")
-            for team in teams:
-                st.write(team)
-            # Draft Rounds
-            st.write(f"**Draft Rounds:** {num_rounds}")
-
-            # Draft Order UI
-            st.write("### Set Draft Order (enter a number for each team)")
-            draft_order_inputs = {}
-            for team in teams:
-                draft_order_inputs[team] = st.number_input(f"Draft position for {team}", min_value=1, max_value=len(teams), step=1, value=teams.index(team)+1, key=f"draft_order_{team}")
-            # Sort teams by entered draft position
-            sorted_teams = sorted(teams, key=lambda t: draft_order_inputs[t])
-            st.session_state['draft_order'] = sorted_teams
-            st.write("Current Draft Order:", st.session_state['draft_order'])
-            
-            # Select your team
-            st.write("### Which team are you managing?")
-            my_team = st.selectbox("Your Team", teams, key="config_my_team")
-            st.session_state['my_team'] = my_team
-            st.info(f"You are managing: {my_team}")
-        else:
-            st.warning("Could not fetch league name. Check credentials and season.")
-    except Exception as e:
-            st.error(f"Error connecting to ESPN API via espn-api package: {e}")
-            return
-    st.session_state['csv_filename'] = f"draft_results_{st.session_state['league_id']}_{st.session_state['season_id']}.csv"
     
-    # Check if draft CSV exists
-    import os
-    draft_exists = os.path.exists(st.session_state['csv_filename'])
+    st.write("Manage your draft setup and configurations.")
     
-    # Let user choose: load existing or start fresh
-    col1, col2 = st.columns(2)
-    with col1:
-        load_existing = st.button("📂 Load Existing Draft", disabled=not draft_exists)
-    with col2:
-        start_fresh = st.button("🆕 Start Fresh Draft")
+    # === MAIN WORKFLOW SELECTION ===
+    st.markdown("---")
+    st.subheader("📋 What would you like to do?")
     
-    if start_fresh:
-        st.session_state['force_fresh_draft'] = True
-        st.rerun()
+    workflow = st.radio(
+        "Select workflow:",
+        ["🆕 Start New League Config", "✏️ Edit Existing Config", "🎯 Practice from Existing Config", "🏆 Live Draft"],
+        horizontal=True
+    )
     
-    if draft_exists and not st.session_state.get('force_fresh_draft', False):
-        if load_existing:
-            st.session_state['player_data_all'] = pd.read_csv(st.session_state['csv_filename'])
-            st.success(f"Loaded draft CSV: {st.session_state['csv_filename']}")
-            
-            # Ensure same_name_group column exists (for backwards compatibility)
-            if 'same_name_group' not in st.session_state['player_data_all'].columns:
-                st.session_state['player_data_all']['same_name_group'] = (
-                    st.session_state['player_data_all']['name_x'].fillna("") + "_" + 
-                    st.session_state['player_data_all']['team_x'].fillna("FA").astype(str)
-                )
-                st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
-            
-            # Recalculate tier baselines from loaded data
-            tier_baselines = {}
-            draft_order_list = st.session_state.get('draft_order', [])
-            slot_counts_dict = st.session_state.get('slot_counts', {})
-            num_teams = len(draft_order_list)
-            for pos in slot_counts_dict.keys():
-                if pos in ["IR", ""]:
-                    continue
-                pos_players = st.session_state['player_data_all'][st.session_state['player_data_all']['position'] == pos].sort_values('PPG', ascending=False)
-                slots_for_pos = slot_counts_dict.get(pos, 0)
-                if pos in ["RB", "WR", "TE"]:
-                    slots_for_pos += slot_counts_dict.get("FLEX", 0)
-                tier_baselines[pos] = {}
-                for tier_num in range(slots_for_pos):
-                    start_idx = tier_num * num_teams
-                    end_idx = start_idx + num_teams
-                    tier_players = pos_players.iloc[start_idx:end_idx]
-                    if len(tier_players) > 0:
-                        baseline_ppg = tier_players['PPG'].mean()
-                        tier_baselines[pos][tier_num] = baseline_ppg
-                    else:
-                        tier_baselines[pos][tier_num] = 0
-            st.session_state['tier_baselines'] = tier_baselines
-        else:
-            st.info(f"Existing draft found: {st.session_state['csv_filename']} — Click 'Load Existing Draft' to resume or 'Start Fresh' for a new draft")
-            return
-    
-    if st.session_state.get('force_fresh_draft', False) or not draft_exists:
-        try:
-            # Force fresh draft if user clicked button or no file exists
-            if draft_exists and st.session_state.get('force_fresh_draft', False):
-                st.warning(f"Starting fresh draft — deleting {st.session_state['csv_filename']}")
-                os.remove(st.session_state['csv_filename'])
-                st.session_state['force_fresh_draft'] = False
-        except Exception as e:
-            st.error(f"Could not delete existing file: {e}")
-            return
-    
-    try:
-        # Normalize player_map to always have player_id and name columns
-        players_data = []
-        for k, v in league.player_map.items():
-            if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
-                # id: name
-                players_data.append({"player_id": k, "name": v})
-            else:
-                # name: id
-                players_data.append({"player_id": v, "name": k})
-        espn_players_df = pd.DataFrame(players_data).drop_duplicates()
-        #st.write("### League Player Universe (IDs and Names only, unique)")
-        #st.dataframe(espn_players_df)
-
-        # Print league.settings for inspection (as JSON for clarity)
-        #st.write("### League Settings Object:")
-        #st.json(vars(league.settings))
-        #st.write("### League Object:")
-        #st.json(vars(league))
-        #st.write("League attributes and methods:")
-        #st.write(dir(league))
-
-        # Display the player_map as a DataFrame
-        #st.write("### Player Class ID crosswalk:")
-        crosswalk = nfl.import_ids()
-        #st.write(crosswalk)  # Uncomment to display the crosswalk data
-
-        # Merge Data
-        merged_data = pd.merge(espn_players_df, crosswalk, left_on="player_id", right_on="espn_id", how="left")
-        if selected_league == "Cujos League":
-            cujos_raw = pd.read_csv("cujos_raw_stats_2025_wk0.csv")  # This was a rush option Is should have folders for each league and let it pick the year.
-            st.write("### Cujos Raw Data:")
-            merged_data = pd.merge(merged_data, cujos_raw, left_on="mfl_id", right_on="id", how="left")
-            cujos_proj = pd.read_csv("cujos_projections_2025_wk0.csv")  # Assuming this is the projection data
-            merged_data = pd.merge(merged_data, cujos_proj, left_on="player", right_on="player", how="left")
-        if selected_league == "Family League":
-            family_raw = pd.read_csv("family_raw_stats_2025_wk0.csv")
-            st.write("### Family Raw Data:")
-            merged_data = pd.merge(merged_data, family_raw, left_on="mfl_id", right_on="id", how="left")
-            family_proj = pd.read_csv("family_projections_2025_wk0.csv")
-            merged_data = pd.merge(merged_data, family_proj, left_on="player", right_on="player", how="left")
-        st.write("### Merged Player Data:")
-
-        # IMPORTANT: Create unique player identifier (name + position + team)
-        # This allows multi-position eligible players (Travis Hunter) AND handles different players with same name
-        merged_data["points"] = pd.to_numeric(merged_data["points"], errors="coerce")
-        merged_data["team_x"] = merged_data["team_x"].fillna("FA").astype(str)
-        merged_data["position"] = merged_data["position"].fillna("UNK").astype(str)
+    # === WORKFLOW 1: START NEW LEAGUE CONFIG ===
+    if workflow == "🆕 Start New League Config":
+        st.write("**Create a new league configuration with keepers**")
         
-        # Create unique_player_id: "name_position_team" to avoid cross-position picks
-        merged_data["unique_player_id"] = (
-            merged_data["name_x"].fillna("") + "_" + 
-            merged_data["position"] + "_" + 
-            merged_data["team_x"]
-        )
+        # Initialize fetch state
+        if 'league_fetched' not in st.session_state:
+            st.session_state['league_fetched'] = False
+        if 'fetched_league_obj' not in st.session_state:
+            st.session_state['fetched_league_obj'] = None
+        if 'available_positions' not in st.session_state:
+            st.session_state['available_positions'] = []
+        if 'available_player_names' not in st.session_state:
+            st.session_state['available_player_names'] = []
         
-        # Create same_name_group: "name_team" for deduplicating same-name players (e.g., two Josh Allens)
-        # This ensures drafting one Josh Allen removes all Josh Allen variants from the pool
-        merged_data["same_name_group"] = (
-            merged_data["name_x"].fillna("") + "_" + 
-            merged_data["team_x"]
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            league_id = st.text_input("League ID", help="ESPN League ID", key="config_league_id")
+            season_id = st.text_input("Season ID (Year)", value="2026", help="Fantasy football season year", key="config_season_id")
         
-        # Check for actual duplicates (same unique_player_id from merge errors)
-        # Keep only the row with the highest projected points for true duplicates
-        if merged_data.duplicated(subset=["unique_player_id"], keep=False).any():
-            merged_data = merged_data.sort_values("points", ascending=False, na_position="last")
-            merged_data = merged_data.drop_duplicates(subset=["unique_player_id"], keep="first")
-        
-        merged_data["pick_number"] = 0
-        merged_data["owner"] = ""
-        merged_data["PPG"] = merged_data["points"] / 17
-        merged_data = merged_data.sort_values("PPG", ascending=False)
-        merged_data["depth"] = merged_data.apply(
-            lambda row: (
-                9 if pd.isnull(row["team_x"]) or pd.isnull(row["position"]) or pd.isnull(row["points"])
-                else merged_data[
-                    (merged_data["team_x"] == row["team_x"]) &
-                    (merged_data["position"] == row["position"]) &
-                    (merged_data["points"] >= row["points"])
-                ].shape[0]
-            ),
-            axis=1
-        )
-        #merged_data["team_x"].fillna("FA", inplace=True)
-        #merged_data["team_x"].replace(None, "FA", inplace=True)
-        st.session_state['player_data_all'] = merged_data
-        st.session_state['player_data_all'].to_csv(st.session_state['csv_filename'], index=False)
-        
-        # Calculate tier baselines for each position (snapshot of full player pool at draft start)
-        tier_baselines = {}
-        draft_order_list = st.session_state.get('draft_order', [])
-        slot_counts_dict = st.session_state.get('slot_counts', {})
-        num_teams = len(draft_order_list)
-        
-        for pos in slot_counts_dict.keys():
-            if pos in ["IR", ""]:
-                continue
-            
-            # Get all players at this position, sorted by PPG
-            pos_players = merged_data[merged_data['position'] == pos].sort_values('PPG', ascending=False)
-            
-            # How many slots for this position (including FLEX)
-            slots_for_pos = slot_counts_dict.get(pos, 0)
-            if pos in ["RB", "WR", "TE"]:
-                slots_for_pos += slot_counts_dict.get("FLEX", 0)  # Add FLEX capacity
-            
-            # Calculate tier baselines (per team slot)
-            tier_baselines[pos] = {}
-            for tier_num in range(slots_for_pos):
-                start_idx = tier_num * num_teams
-                end_idx = start_idx + num_teams
-                tier_players = pos_players.iloc[start_idx:end_idx]
-                
-                if len(tier_players) > 0:
-                    baseline_ppg = tier_players['PPG'].mean()
-                    tier_baselines[pos][tier_num] = baseline_ppg
+        with col2:
+            st.write("")  # Spacing
+            st.write("")
+            if st.button("🔄 Fetch League Info from ESPN", use_container_width=True):
+                if league_id and season_id:
+                    try:
+                        with st.spinner("Fetching league data..."):
+                            # Get ESPN credentials from secrets
+                            espn_s2 = st.secrets.get("stephen_espn_s2")
+                            swid = st.secrets.get("stephen_swid")
+                            
+                            # Create league object with credentials if available
+                            if espn_s2 and swid:
+                                league = League(league_id=int(league_id), year=int(season_id), espn_s2=espn_s2, swid=swid)
+                            else:
+                                league = League(league_id=int(league_id), year=int(season_id))
+                            
+                            st.session_state['fetched_league_obj'] = league
+                            
+                            # Extract league name (try multiple attribute paths)
+                            league_name = getattr(league, 'league_name', None)
+                            if not league_name and hasattr(league, 'settings'):
+                                league_name = getattr(league.settings, 'name', f"League {league_id}")
+                            
+                            # Extract positions from league settings (scoring format defines eligible positions)
+                            positions = []
+                            flex_positions = {}  # Store FLEX information for value calculations
+                            
+                            # Try multiple ways to get positions
+                            if hasattr(league, 'settings'):
+                                # Method 1: position_slot_counts (THIS IS THE KEY!)
+                                if hasattr(league.settings, 'position_slot_counts'):
+                                    position_slot_counts = league.settings.position_slot_counts
+                                    
+                                    # Extract positions: only actual positions (not FLEX, not bench, not empty)
+                                    for pos, count in position_slot_counts.items():
+                                        if count > 0 and pos not in ["BN", "BE", "IR", ""]:
+                                            # Skip FLEX positions (contain /) - store separately for value calc
+                                            if "/" in pos:
+                                                flex_positions[pos] = count
+                                            else:
+                                                positions.append(pos)
+                                    
+                                    st.write(f"✅ **Extracted {len(positions)} positions**: {sorted(positions)}")
+                                    if flex_positions:
+                                        st.write(f"📋 **FLEX slots** (for value calculations): {flex_positions}")
+                                else:
+                                    st.write("❌ position_slot_counts not found")
+                                
+                                # Method 2: _raw_scoring_settings (fallback)
+                                if not positions and hasattr(league.settings, '_raw_scoring_settings'):
+                                    st.write("Using _raw_scoring_settings as fallback...")
+                                    scoring_settings = league.settings._raw_scoring_settings
+                                    if isinstance(scoring_settings, dict):
+                                        for pos_key, pos_data in scoring_settings.items():
+                                            if pos_key not in ["BN", "BE", "IR", ""]:
+                                                if "/" not in pos_key:
+                                                    positions.append(pos_key)
+                                                else:
+                                                    flex_positions[pos_key] = 1
+                            else:
+                                st.write("❌ league.settings does NOT exist")
+                            
+                            # Remove duplicates and sort
+                            positions = sorted(list(set(positions)))
+                            
+                            # Fallback to common positions if not found in settings
+                            if not positions:
+                                st.write("⚠️ Using fallback positions (extraction failed)")
+                                positions = ["QB", "RB", "WR", "TE", "DEF", "K"]
+                            
+                            st.session_state['available_positions'] = positions
+                            st.session_state['flex_positions'] = flex_positions  # Store for later use
+                            
+                            # Extract player data with positions from league
+                            # Build a dict of player_name -> position from league
+                            player_position_map = {}  # player_name -> set of positions
+                            
+                            # Try to get player data from league.teams or league object
+                            if hasattr(league, 'teams'):
+                                for team in league.teams:
+                                    if hasattr(team, 'roster'):
+                                        for player in team.roster:
+                                            player_name = getattr(player, 'name', None)
+                                            player_pos = getattr(player, 'eligibleSlots', None)
+                                            if player_name:
+                                                if player_name not in player_position_map:
+                                                    player_position_map[player_name] = set()
+                                                if player_pos:
+                                                    if isinstance(player_pos, list):
+                                                        player_position_map[player_name].update(player_pos)
+                                                    else:
+                                                        player_position_map[player_name].add(str(player_pos))
+                                                # Note: If no position data, player_position_map[player_name] will be empty set
+                            
+                            # Also extract from player_map as fallback
+                            if hasattr(league, 'player_map'):
+                                for k, v in league.player_map.items():
+                                    if isinstance(v, str) and v not in player_position_map:
+                                        player_position_map[v] = set()
+                                    elif isinstance(k, str) and k not in player_position_map:
+                                        player_position_map[k] = set()
+                            
+                            st.session_state['player_position_map'] = player_position_map
+                            st.session_state['available_player_names'] = sorted(list(player_position_map.keys()))
+                            st.session_state['league_fetched'] = True
+                            
+                            st.success(f"✅ Fetched league: {league_name} ({len(league.teams)} teams)")
+                            st.info(f"✓ {len(st.session_state['available_player_names'])} players loaded")
+                            st.info(f"✓ Positions: {', '.join(positions)}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to fetch league: {e}")
+                        st.error("ESPN fetch is **required** — it provides:")
+                        st.error("  • Player universe and ADP data")
+                        st.error("  • Position eligibility rules")
+                        st.error("  • Scoring settings")
+                        st.info("Please verify:")
+                        st.info("  • League ID is correct")
+                        st.info("  • ESPN credentials in .streamlit/secrets.toml are valid")
                 else:
-                    tier_baselines[pos][tier_num] = 0
+                    st.error("Please enter League ID and Season ID")
         
-        st.session_state['tier_baselines'] = tier_baselines
-        st.success(f"Draft csv created: {st.session_state['csv_filename']}!")
-    except Exception as e:
-        st.error(f"Error creating player data: {e}")
-        return
-
-    keep_columns = ['name_x', 'position', 'team_x', # who 
-                   'points', 'floor', 'ceiling', 'position_rank', "tier", 'adp', "depth", # what
-                   'age', 'college', 'draft_year_x', 'weight', 'PPG', 'espn_id', "pick_number"] # Bio and History would be next
-    st.session_state['player_summary'] = st.session_state['player_data_all'][keep_columns]
-    st.write("### Next pick after loading:")
-    st.session_state["pick_number_input"] = st.session_state['player_data_all']['pick_number'].max() + 1
-    st.write(st.session_state["pick_number_input"])
-    st.write("### Key Facts:")
-    st.dataframe(st.session_state['player_summary'])
+        # Require ESPN fetch before proceeding
+        if not st.session_state.get('league_fetched', False):
+            st.warning("⚠️ Please fetch league info first (ESPN data is required for player universe, positions, and scoring)")
+            st.stop()
+        
+        # Draft order setup
+        st.write("### Draft Order")
+        num_teams = st.number_input("Number of Teams", min_value=2, max_value=16, value=10, step=1, key="config_num_teams")
+        
+        draft_order = []
+        team_cols = st.columns(2)
+        for i in range(num_teams):
+            col_idx = i % 2
+            with team_cols[col_idx]:
+                team_name = st.text_input(f"Team {i+1} Name", key=f"new_team_{i}")
+                if team_name:
+                    draft_order.append(team_name)
+        
+        # Your team selection
+        st.write("### Your Team")
+        my_team = st.selectbox("Which team are you managing?", draft_order if draft_order else ["No teams entered yet"], key="new_my_team")
+        
+        # Keepers setup
+        st.write("### Keepers by Team (Snake Draft)")
+        keepers = {}
+        
+        # Get available positions and player data
+        available_positions = st.session_state.get('available_positions', ["QB", "RB", "WR", "TE", "DEF", "K"])
+        player_position_map = st.session_state.get('player_position_map', {})
+        all_player_names = st.session_state.get('available_player_names', [])
+        
+        for team_idx, team in enumerate(draft_order):
+            with st.expander(f"**{team}** - Add Keepers"):
+                num_keepers = st.number_input(
+                    f"Number of keepers for {team}", 
+                    min_value=0, 
+                    max_value=3, 
+                    value=0, 
+                    step=1, 
+                    key=f"num_keepers_{team}"
+                )
+                
+                team_keepers = []
+                for k_idx in range(num_keepers):
+                    col1, col2, col3 = st.columns(3)
+                    
+                    # Position comes first (to filter players)
+                    with col2:
+                        position = st.selectbox(
+                            "Position",
+                            available_positions,
+                            key=f"keeper_pos_{team}_{k_idx}",
+                            help="Select position to filter players"
+                        )
+                    
+                    # Filter players by selected position
+                    position_players = []
+                    if position and player_position_map:
+                        # Find players eligible for this position
+                        for player_name, positions_set in player_position_map.items():
+                            if position in positions_set or not positions_set:
+                                position_players.append(player_name)
+                        position_players = sorted(position_players)
+                    elif not player_position_map:
+                        # Fallback if no position data
+                        position_players = all_player_names
+                    else:
+                        position_players = all_player_names
+                    
+                    # Player name (filtered by position)
+                    with col1:
+                        if position_players:
+                            player_name = st.selectbox(
+                                "Player Name",
+                                position_players,
+                                key=f"keeper_player_{team}_{k_idx}",
+                                help=f"Players eligible for {position}"
+                            )
+                        else:
+                            player_name = st.text_input(
+                                "Player Name",
+                                key=f"keeper_player_{team}_{k_idx}",
+                                help=f"No players found for {position}"
+                            )
+                    
+                    # Pick number (snake draft calculation)
+                    with col3:
+                        # Snake draft formula: alternating draft order per round
+                        if k_idx % 2 == 0:  # Even keeper round (0, 2, 4...)
+                            keeper_pick = k_idx * num_teams + team_idx + 1
+                        else:  # Odd keeper round (1, 3, 5...)
+                            keeper_pick = (k_idx + 1) * num_teams - team_idx
+                        
+                        pick_num = st.number_input(
+                            "Pick #",
+                            value=int(keeper_pick),
+                            min_value=1,
+                            max_value=300,
+                            step=1,
+                            key=f"keeper_pick_{team}_{k_idx}",
+                            help=f"Snake draft (default: {keeper_pick})"
+                        )
+                    
+                    if player_name:
+                        team_keepers.append({
+                            "player": player_name,
+                            "position": position,
+                            "pick": int(pick_num)
+                        })
+                
+                keepers[team] = team_keepers
+        
+        # Save new config
+        if st.button("✅ Create Config", use_container_width=True):
+            if league_id and season_id and draft_order and my_team:
+                new_config = {
+                    "league_id": int(league_id),
+                    "season_id": int(season_id),
+                    "draft_order": draft_order,
+                    "my_team": my_team,
+                    "current_plan": {
+                        "keepers": keepers,
+                        "drafted_players": [],
+                        "planned_picks": []
+                    }
+                }
+                
+                # Save config with timestamp
+                config_filename = ConfigManager.save_config(new_config)
+                st.session_state['current_config_file'] = config_filename
+                
+                # Load it into session state
+                league_info = ConfigManager.extract_league_info(new_config)
+                st.session_state['league_id'] = league_info['league_id']
+                st.session_state['season_id'] = league_info['season_id']
+                st.session_state['teams'] = league_info['draft_order']
+                st.session_state['my_team'] = league_info['my_team']
+                st.session_state['draft_order'] = league_info['draft_order']
+                st.session_state['keepers'] = league_info['keepers']
+                st.session_state['current_plan'] = new_config.get('current_plan', {})
+                st.session_state['config_loaded'] = True
+                
+                # Set num_rounds for draft board (21 standard rounds)
+                st.session_state['num_rounds'] = 21
+                
+                st.success(f"✅ Config created: {config_filename}")
+                st.balloons()
+                st.rerun()
+            else:
+                st.error("Please fill in League ID, Season ID, Draft Order, and Your Team")
+    
+    # === WORKFLOW 1.5: EDIT EXISTING CONFIG ===
+    elif workflow == "✏️ Edit Existing Config":
+        st.write("**Edit keepers and draft order in an existing configuration**")
+        
+        configs = ConfigManager.list_configs()
+        
+        if not configs:
+            st.warning("No configuration files found. Create one using 'Start New League Config'.")
+        else:
+            selected_config = st.selectbox(
+                "Select Configuration to Edit",
+                configs,
+                help="Choose a config to edit"
+            )
+            
+            if st.button("Load Config for Editing"):
+                try:
+                    config = ConfigManager.load_config(selected_config)
+                    st.session_state['editing_config_file'] = selected_config
+                    st.session_state['editing_config'] = config
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load config: {e}")
+            
+            # If config is loaded for editing, show edit form
+            if st.session_state.get('editing_config_file') == selected_config:
+                config = st.session_state.get('editing_config', {})
+                league_info = ConfigManager.extract_league_info(config)
+                
+                st.markdown("---")
+                st.write("**Current Configuration:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("League ID", league_info['league_id'])
+                with col2:
+                    st.metric("Your Team", league_info['my_team'])
+                
+                st.write(f"**Draft Order:** {', '.join(league_info['draft_order'])}")
+                
+                # Edit keepers
+                st.write("### Update Keepers")
+                available_positions = st.session_state.get('available_positions', ["QB", "RB", "WR", "TE", "DEF", "K"])
+                player_position_map = st.session_state.get('player_position_map', {})
+                all_player_names = st.session_state.get('available_player_names', [])
+                
+                updated_keepers = {}
+                draft_order = league_info['draft_order']
+                
+                for team_idx, team in enumerate(draft_order):
+                    with st.expander(f"**{team}** - Update Keepers"):
+                        current_keepers = league_info['keepers'].get(team, [])
+                        num_keepers = st.number_input(
+                            f"Number of keepers for {team}",
+                            min_value=0,
+                            max_value=3,
+                            value=len(current_keepers),
+                            step=1,
+                            key=f"edit_num_keepers_{team}"
+                        )
+                        
+                        team_keepers = []
+                        for k_idx in range(num_keepers):
+                            col1, col2, col3 = st.columns(3)
+                            
+                            # Get current keeper data if exists
+                            current_keeper = current_keepers[k_idx] if k_idx < len(current_keepers) else None
+                            
+                            with col2:
+                                position = st.selectbox(
+                                    "Position",
+                                    available_positions,
+                                    index=available_positions.index(current_keeper['position']) if current_keeper and current_keeper['position'] in available_positions else 0,
+                                    key=f"edit_keeper_pos_{team}_{k_idx}",
+                                    help="Select position to filter players"
+                                )
+                            
+                            # Filter players by position
+                            position_players = []
+                            if position and player_position_map:
+                                for player_name, positions_set in player_position_map.items():
+                                    if position in positions_set or not positions_set:
+                                        position_players.append(player_name)
+                                position_players = sorted(position_players)
+                            else:
+                                position_players = all_player_names
+                            
+                            with col1:
+                                default_player_idx = 0
+                                if current_keeper and current_keeper['player'] in position_players:
+                                    default_player_idx = position_players.index(current_keeper['player'])
+                                
+                                player_name = st.selectbox(
+                                    "Player Name",
+                                    position_players,
+                                    index=default_player_idx,
+                                    key=f"edit_keeper_player_{team}_{k_idx}",
+                                )
+                            
+                            with col3:
+                                default_pick = current_keeper['pick'] if current_keeper else (k_idx * len(draft_order) + team_idx + 1)
+                                pick_num = st.number_input(
+                                    "Pick #",
+                                    value=int(default_pick),
+                                    min_value=1,
+                                    max_value=300,
+                                    step=1,
+                                    key=f"edit_keeper_pick_{team}_{k_idx}",
+                                )
+                            
+                            if player_name:
+                                team_keepers.append({
+                                    "player": player_name,
+                                    "position": position,
+                                    "pick": int(pick_num)
+                                })
+                        
+                        updated_keepers[team] = team_keepers
+                
+                # Save updated config
+                if st.button("💾 Save Updated Config", use_container_width=True):
+                    config['current_plan']['keepers'] = updated_keepers
+                    ConfigManager.save_config(config, st.session_state['editing_config_file'])
+                    st.session_state['editing_config_file'] = None
+                    st.session_state['editing_config'] = None
+                    st.success(f"✅ Config updated: {selected_config}")
+                    st.balloons()
+                    st.rerun()
+    
+    # === WORKFLOW 2: PRACTICE FROM EXISTING CONFIG ===
+    elif workflow == "🎯 Practice from Existing Config":
+        st.write("**Run a practice draft with an existing configuration**")
+        
+        configs = ConfigManager.list_configs()
+        
+        if not configs:
+            st.warning("No configuration files found. Create one using 'Start New League Config'.")
+        else:
+            selected_config = st.selectbox(
+                "Select Configuration",
+                configs,
+                help="Choose a config to practice with"
+            )
+            
+            if st.button("Load Config for Practice Draft"):
+                try:
+                    config = ConfigManager.load_config(selected_config)
+                    league_info = ConfigManager.extract_league_info(config)
+                    st.session_state['league_id'] = league_info['league_id']
+                    st.session_state['season_id'] = league_info['season_id']
+                    st.session_state['teams'] = league_info['draft_order']
+                    st.session_state['my_team'] = league_info['my_team']
+                    st.session_state['draft_order'] = league_info['draft_order']
+                    st.session_state['keepers'] = league_info['keepers']
+                    st.session_state['current_plan'] = config.get('current_plan', {})
+                    st.session_state['current_config_file'] = selected_config
+                    st.session_state['config_loaded'] = True
+                    
+                    # Set num_rounds for draft board
+                    st.session_state['num_rounds'] = 21
+                    
+                    st.success(f"✅ Loaded: {selected_config}")
+                    st.info("📝 **Next steps:** Go to 'Current Board' to start your practice draft")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load config: {e}")
+            
+            # Show config details
+            st.markdown("---")
+            st.write("**Config Details:**")
+            try:
+                config = ConfigManager.load_config(selected_config)
+                league_info = ConfigManager.extract_league_info(config)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("League ID", league_info['league_id'])
+                with col2:
+                    st.metric("Season ID", league_info['season_id'])
+                with col3:
+                    st.metric("Your Team", league_info['my_team'])
+                
+                st.write("**Draft Order:**", league_info['draft_order'])
+                
+                if league_info['keepers']:
+                    st.write("**Keepers:**")
+                    for team, team_keepers in league_info['keepers'].items():
+                        if team_keepers:
+                            keeper_str = ", ".join([f"{k['player']} ({k['position']})" for k in team_keepers])
+                            st.write(f"- {team}: {keeper_str}")
+            except Exception as e:
+                st.error(f"Could not load config details: {e}")
+    
+    # === WORKFLOW 3: LIVE DRAFT ===
+    else:  # Live Draft
+        st.write("**Resume your live league draft**")
+        
+        configs = ConfigManager.list_configs()
+        
+        if not configs:
+            st.warning("No configuration files found. Create one using 'Start New League Config'.")
+        else:
+            selected_config = st.selectbox(
+                "Select Configuration",
+                configs,
+                help="Choose your live draft config"
+            )
+            
+            if st.button("Load Live Draft"):
+                try:
+                    config = ConfigManager.load_config(selected_config)
+                    league_info = ConfigManager.extract_league_info(config)
+                    st.session_state['league_id'] = league_info['league_id']
+                    st.session_state['season_id'] = league_info['season_id']
+                    st.session_state['teams'] = league_info['draft_order']
+                    st.session_state['my_team'] = league_info['my_team']
+                    st.session_state['draft_order'] = league_info['draft_order']
+                    st.session_state['keepers'] = league_info['keepers']
+                    st.session_state['current_plan'] = config.get('current_plan', {})
+                    st.session_state['current_config_file'] = selected_config
+                    st.session_state['config_loaded'] = True
+                    
+                    # Set num_rounds for draft board
+                    st.session_state['num_rounds'] = 21
+                    
+                    st.success(f"✅ Live Draft Loaded: {selected_config}")
+                    st.info("🏆 **You're live!** Go to 'Current Board' to manage your draft")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load config: {e}")
+            
+            # Show config details
+            st.markdown("---")
+            st.write("**Config Details:**")
+            try:
+                config = ConfigManager.load_config(selected_config)
+                league_info = ConfigManager.extract_league_info(config)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("League ID", league_info['league_id'])
+                with col2:
+                    st.metric("Season ID", league_info['season_id'])
+                with col3:
+                    st.metric("Your Team", league_info['my_team'])
+                
+                st.write("**Draft Order:**", league_info['draft_order'])
+            except Exception as e:
+                st.error(f"Could not load config details: {e}")

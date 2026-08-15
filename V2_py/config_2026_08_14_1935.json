@@ -1,0 +1,110 @@
+{
+  "league_id": 54926,
+  "season_id": 2026,
+  "draft_order": [
+    "Daytrippin  Raiders",
+    "Who Dey and The Blowfish",
+    "Balls Deep",
+    "ROOKIES AND BITCHES",
+    "#HereWeGo",
+    "TD Grab",
+    "Straight Cash Homie",
+    "Adam's Family",
+    "Gridiron Elite",
+    "Stripped Balls and Tight Ends"
+  ],
+  "my_team": "TD Grab",
+  "current_plan": {
+    "keepers": {
+      "Daytrippin  Raiders": [
+        {
+          "player": "Chase Brown",
+          "position": "RB",
+          "pick": 1
+        },
+        {
+          "player": "Travis Hunter",
+          "position": "WR",
+          "pick": 20
+        }
+      ],
+      "Who Dey and The Blowfish": [
+        {
+          "player": "De'Von Achane",
+          "position": "RB",
+          "pick": 2
+        },
+        {
+          "player": "Jack Campbell",
+          "position": "LB",
+          "pick": 19
+        }
+      ],
+      "Balls Deep": [],
+      "ROOKIES AND BITCHES": [
+        {
+          "player": "Bucky Irving",
+          "position": "RB",
+          "pick": 4
+        },
+        {
+          "player": "Andrew Van Ginkel",
+          "position": "DL",
+          "pick": 17
+        }
+      ],
+      "#HereWeGo": [],
+      "TD Grab": [
+        {
+          "player": "Derrick Henry",
+          "position": "RB",
+          "pick": 6
+        },
+        {
+          "player": "Cedric Gray",
+          "position": "LB",
+          "pick": 15
+        }
+      ],
+      "Straight Cash Homie": [
+        {
+          "player": "Jaxon Smith-Njigba",
+          "position": "WR",
+          "pick": 7
+        },
+        {
+          "player": "Jeffery Simmons",
+          "position": "DL",
+          "pick": 14
+        }
+      ],
+      "Adam's Family": [
+        {
+          "player": "Jonathan Taylor",
+          "position": "RB",
+          "pick": 8
+        },
+        {
+          "player": "Andrew Van Ginkel",
+          "position": "DL",
+          "pick": 18
+        }
+      ],
+      "Gridiron Elite": [
+        {
+          "player": "James Cook III",
+          "position": "RB",
+          "pick": 9
+        },
+        {
+          "player": "Foyesade Oluokun",
+          "position": "LB",
+          "pick": 12
+        }
+      ],
+      "Stripped Balls and Tight Ends": []
+    },
+    "drafted_players": [],
+    "planned_picks": []
+  }
+}

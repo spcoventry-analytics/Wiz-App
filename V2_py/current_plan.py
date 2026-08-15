@@ -2,82 +2,172 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 def show_current_plan():
-    st.title("Current Plan - Position Priority")
+    st.title("Current Plan")
     
     player_data_all = st.session_state.get('player_data_all')
     draft_order = st.session_state.get('draft_order', [])
     position_colors = st.session_state.get('position_colors', {})
     slot_counts = st.session_state.get('slot_counts', {})
-    tier_baselines = st.session_state.get('tier_baselines', {})
-    your_team_default = st.session_state.get('my_team', draft_order[0] if draft_order else None)
+    num_teams = len(draft_order) if draft_order else 1
     
     if player_data_all is None or player_data_all.empty:
         st.warning("No player data available.")
         return
     
-    if not slot_counts:
-        st.warning("League slot structure not loaded. Please configure your league first.")
-        return
+    # === CREATE SUB-TABS: BUILD PLAN vs REVIEW PLAN ===
+    tab_build, tab_review = st.tabs(["🎯 Build Plan (Round Strategy)", "📋 Review Plan"])
     
-    # Team selector
-    team_to_analyze = st.selectbox(
-        "Select team to analyze",
-        draft_order,
-        index=draft_order.index(your_team_default) if your_team_default in draft_order else 0,
-        help="See position priorities for this team"
-    )
+    # === TAB 1: BUILD PLAN (ROUND STRATEGY) ===
+    with tab_build:
+        st.write("**Build Your Draft Plan - Select Position for Each Round**")
+        st.write("*For each round, select which position to draft. See the expected player and points.*")
+        
+        # Initialize hypothetical picks in session state if not present
+        if 'hypothetical_picks' not in st.session_state:
+            st.session_state['hypothetical_picks'] = {}
+        
+        # Get available players (not yet drafted)
+        available_players = player_data_all[player_data_all["pick_number"] == 0].copy()
+        
+        # Add positions to available data for this tab
+        available_players_strategy = available_players.copy()
+        # Drop players without ADP (they can't be assigned to a draft round)
+        available_players_strategy = available_players_strategy.dropna(subset=['adp', 'points'])
+        
+        if available_players_strategy.empty:
+            st.warning("No players with ADP data available for round strategy.")
+            return
+        
+        available_players_strategy['draft_round'] = (np.ceil(available_players_strategy['adp'] / num_teams)).fillna(1).astype(int)
+        available_players_strategy['draft_round'] = available_players_strategy['draft_round'].clip(lower=1, upper=21)
+        
+        # Get available positions
+        available_positions_list = sorted(available_players_strategy['position'].unique())
+        
+        # Create a 3-column layout for round selection (for mobile/tablet)
+        st.write("**Select Position for Each Round:**")
+        
+        # Use columns to organize selectors in a grid
+        cols = st.columns(3)
+        for round_num in range(1, 22):
+            col_idx = (round_num - 1) % 3
+            
+            with cols[col_idx]:
+                selected_pos = st.selectbox(
+                    f"Round {round_num}",
+                    ["—"] + available_positions_list,
+                    key=f"round_{round_num}_pos",
+                    index=0
+                )
+                
+                # If a position is selected for this round, find the best player
+                if selected_pos != "—":
+                    # Find players at this position in this draft round
+                    round_players = available_players_strategy[
+                        (available_players_strategy['position'] == selected_pos) &
+                        (available_players_strategy['draft_round'] == round_num)
+                    ].sort_values('POS_Value_Normalized', ascending=False) if 'POS_Value_Normalized' in available_players_strategy.columns else available_players_strategy[
+                        (available_players_strategy['position'] == selected_pos) &
+                        (available_players_strategy['draft_round'] == round_num)
+                    ]
+                    
+                    if not round_players.empty:
+                        best_player = round_players.iloc[0]
+                        st.session_state['hypothetical_picks'][round_num] = {
+                            'position': selected_pos,
+                            'player_name': best_player['name_x'],
+                            'player_id': best_player.get('espn_id', ''),
+                            'points': best_player.get('points', 0),
+                            'ppg': best_player.get('PPG', 0),
+                            'norm_value': best_player.get('POS_Value_Normalized', 0)
+                        }
+                        
+                        # Display the selected player
+                        st.write(f"📍 **{best_player['name_x']}**")
+                        st.caption(f"{best_player.get('points', 0):.0f} pts | {best_player.get('POS_Value_Normalized', 0):.2f} norm val")
+                    else:
+                        st.caption("No players available in this round")
+                else:
+                    # Remove from hypothetical if deselected
+                    if round_num in st.session_state['hypothetical_picks']:
+                        del st.session_state['hypothetical_picks'][round_num]
+        
+        # Show hypothetical roster summary
+        if st.session_state['hypothetical_picks']:
+            st.divider()
+            st.write("**Draft Plan Summary:**")
+            
+            hyp_picks = st.session_state['hypothetical_picks']
+            total_points = sum(p['points'] for p in hyp_picks.values())
+            avg_norm_val = np.mean([p['norm_value'] for p in hyp_picks.values()]) if hyp_picks else 0
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Points", f"{total_points:.0f}")
+            with col2:
+                st.metric("Avg Norm Value", f"{avg_norm_val:.2f}")
+            with col3:
+                st.metric("Picks Selected", len(hyp_picks))
+            
+            # Show roster table
+            roster_rows = []
+            for round_num in sorted(hyp_picks.keys()):
+                pick = hyp_picks[round_num]
+                roster_rows.append({
+                    'Round': round_num,
+                    'Position': pick['position'],
+                    'Player': pick['player_name'],
+                    'Points': round(pick['points'], 1),
+                    'PPG': round(pick['ppg'], 2),
+                    'Norm Value': round(pick['norm_value'], 2)
+                })
+            
+            roster_df = pd.DataFrame(roster_rows)
+            st.dataframe(roster_df, use_container_width=True, hide_index=True)
+            
+            if st.button("🗑️ Clear All Selections"):
+                st.session_state['hypothetical_picks'] = {}
+                st.rerun()
     
-    # === SHOW HYPOTHETICAL ROSTER IF ENABLED ===
-    if st.session_state.get('show_hypothetical_roster', False) and st.session_state.get('hypothetical_picks'):
-        st.divider()
-        st.write("### 🎯 Hypothetical Draft Plan")
+    # === TAB 2: REVIEW PLAN ===
+    with tab_review:
+        st.write("**Your Current Draft Plan**")
         
-        hyp_picks = st.session_state['hypothetical_picks']
-        
-        # Display hypothetical roster
-        hyp_rows = []
-        total_hyp_points = 0
-        
-        for round_num in sorted(hyp_picks.keys()):
-            pick = hyp_picks[round_num]
-            hyp_rows.append({
-                'Round': round_num,
-                'Position': pick['position'],
-                'Player': pick['player_name'],
-                'Points': round(pick['points'], 1),
-                'PPG': round(pick['ppg'], 2),
-                'Norm Value': round(pick['norm_value'], 2)
-            })
-            total_hyp_points += pick['points']
-        
-        hyp_df = pd.DataFrame(hyp_rows)
-        st.dataframe(hyp_df, use_container_width=True, hide_index=True)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Points (Hyp)", f"{total_hyp_points:.0f}")
-        with col2:
-            st.metric("Picks in Plan", len(hyp_picks))
-        with col3:
-            st.metric("Avg Norm Value", f"{np.mean([p['norm_value'] for p in hyp_picks.values()]):.2f}")
-        
-        st.divider()
-    
-    # Get picks made by this team
-    team_picks = player_data_all[(player_data_all['pick_number'] > 0) & (player_data_all['owner'] == team_to_analyze)]
-    
-    # Count filled slots by position (BASE positions only, not including FLEX)
-    filled_by_position = {}
-    for pos in slot_counts.keys():
-        if pos not in ["IR", "", "FLEX"]:
-            filled_by_position[pos] = len(team_picks[team_picks['position'] == pos])
-    
-    # Available players (not yet drafted)
-    available_players = player_data_all[player_data_all["pick_number"] == 0]
-    
-    if available_players.empty:
+        # Show hypothetical roster if it exists
+        if st.session_state.get('hypothetical_picks'):
+            hyp_picks = st.session_state['hypothetical_picks']
+            
+            # Display hypothetical roster
+            hyp_rows = []
+            total_hyp_points = 0
+            
+            for round_num in sorted(hyp_picks.keys()):
+                pick = hyp_picks[round_num]
+                hyp_rows.append({
+                    'Round': round_num,
+                    'Position': pick['position'],
+                    'Player': pick['player_name'],
+                    'Points': round(pick['points'], 1),
+                    'PPG': round(pick['ppg'], 2),
+                    'Norm Value': round(pick['norm_value'], 2)
+                })
+                total_hyp_points += pick['points']
+            
+            hyp_df = pd.DataFrame(hyp_rows)
+            st.dataframe(hyp_df, use_container_width=True, hide_index=True)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Points", f"{total_hyp_points:.0f}")
+            with col2:
+                st.metric("Picks in Plan", len(hyp_picks))
+            with col3:
+                st.metric("Avg Norm Value", f"{np.mean([p['norm_value'] for p in hyp_picks.values()]):.2f}")
+        else:
+            st.info("No draft plan built yet. Go to 'Build Plan' tab to create one.")
         st.warning("No available players remaining!")
         return
     
