@@ -40,7 +40,18 @@
           "pick": 19
         }
       ],
-      "Balls Deep": [],
+      "Balls Deep": [
+        {
+          "player": "Ja'Marr Chase",
+          "position": "WR",
+          "pick": 3
+        },
+        {
+          "player": "Alex Highsmith",
+          "position": "DL",
+          "pick": 13
+        }
+      ],
       "ROOKIES AND BITCHES": [
         {
           "player": "Bucky Irving",
@@ -53,10 +64,21 @@
           "pick": 17
         }
       ],
-      "#HereWeGo": [],
+      "#HereWeGo": [
+        {
+          "player": "Bijan Robinson",
+          "position": "RB",
+          "pick": 5
+        },
+        {
+          "player": "Aidan Hutchinson",
+          "position": "DL",
+          "pick": 15
+        }
+      ],
       "TD Grab": [
         {
-          "player": "Derrick Henry",
+          "player": "Javonte Williams",
           "position": "RB",
           "pick": 6
         },
@@ -85,7 +107,7 @@
           "pick": 8
         },
         {
-          "player": "Andrew Van Ginkel",
+          "player": "Byron Young",
           "position": "DL",
           "pick": 18
         }
@@ -102,7 +124,18 @@
           "pick": 12
         }
       ],
-      "Stripped Balls and Tight Ends": []
+      "Stripped Balls and Tight Ends": [
+        {
+          "player": "Jahmyr Gibbs",
+          "position": "RB",
+          "pick": 10
+        },
+        {
+          "player": "Jordyn Brooks",
+          "position": "LB",
+          "pick": 20
+        }
+      ]
     },
     "drafted_players": [],
     "planned_picks": []

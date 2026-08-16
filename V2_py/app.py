@@ -15,6 +15,44 @@ from config_manager import ConfigManager
 
 from espn_api.football import League
 
+
+def clean_positions(player_data):
+    """
+    Clean position data by:
+    1. Replacing UNK with position_x fallback
+    2. Normalizing position variants (CB→DB, S→DB, DE→DL, DT→DL)
+    
+    Returns cleaned DataFrame.
+    """
+    df = player_data.copy()
+    
+    # Helper function to normalize position variants
+    def normalize_pos(pos):
+        if not pos or pos in ["", None]:
+            return pos
+        pos = str(pos).upper()
+        if pos in ["CB", "S"]:
+            return "DB"
+        if pos in ["DE", "DT"]:
+            return "DL"
+        return pos
+    
+    # Clean each row
+    for idx, row in df.iterrows():
+        current_pos = row.get('position')
+        fallback_pos = row.get('position_x')
+        
+        # If position is UNK, use position_x fallback
+        if current_pos == "UNK" and fallback_pos and fallback_pos not in ["", None]:
+            df.loc[idx, 'position'] = normalize_pos(fallback_pos)
+        # Normalize all positions (including already-set positions)
+        elif current_pos and current_pos not in ["", None]:
+            normalized = normalize_pos(current_pos)
+            if normalized != current_pos:
+                df.loc[idx, 'position'] = normalized
+    
+    return df
+
 # Set page config for mobile friendliness
 st.set_page_config(page_title="Fantasy Football Draft Board", layout="wide")
 
@@ -94,7 +132,12 @@ def auto_resume_existing_draft():
     
     try:
         # Load the draft CSV
-        st.session_state['player_data_all'] = pd.read_csv(latest_file)
+        player_data = pd.read_csv(latest_file)
+        
+        # Clean position data (UNK→position_x fallback, normalize variants)
+        player_data = clean_positions(player_data)
+        
+        st.session_state['player_data_all'] = player_data
         
         # Ensure same_name_group column exists (for backwards compatibility)
         if 'same_name_group' not in st.session_state['player_data_all'].columns:

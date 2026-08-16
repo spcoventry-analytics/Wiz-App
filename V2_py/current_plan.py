@@ -381,7 +381,11 @@ def show_current_plan():
                             tier_baseline = tier_baselines[pos][slot_num - 1]
                         
                         # Calculate marginal value (PPG - baseline)
+                        # Handle NaN PPG values (defensive/IDP players without projections)
                         player_ppg = pick['PPG']
+                        if pd.isna(player_ppg):
+                            player_ppg = 0  # Default to 0 for players without PPG data
+                        
                         marginal_value = player_ppg - tier_baseline
                         
                         # Total projected points (PPG * 17 games)

@@ -2,8 +2,36 @@
 import streamlit as st
 import pandas as pd
 import json
+import glob
+import os
 from config_manager import ConfigManager
 from espn_api.football import League
+
+
+def normalize_position(pos):
+    """
+    Normalize position variants to standard positions.
+    Maps granular positions (CB, S, DE, DT, etc.) to standard positions (DB, DL, etc.)
+    
+    Mappings:
+    - CB, S → DB (Cornerback, Safety → Defensive Back)
+    - DE, DT → DL (Defensive End, Defensive Tackle → Defensive Line)
+    - Other positions pass through unchanged
+    """
+    if not pos or pos in ["", "UNK", None]:
+        return pos
+    
+    pos = str(pos).upper()
+    
+    # Defensive backs
+    if pos in ["CB", "S"]:
+        return "DB"
+    # Defensive line
+    if pos in ["DE", "DT"]:
+        return "DL"
+    
+    # Pass through unchanged
+    return pos
 
 
 def show_configuration():
@@ -352,11 +380,76 @@ def show_configuration():
                 
                 st.write(f"**Draft Order:** {', '.join(league_info['draft_order'])}")
                 
+                # Load league from ESPN if not already loaded for this config
+                if st.session_state.get('editing_league_id') != league_info['league_id']:
+                    with st.spinner("Loading player data..."):
+                        try:
+                            # Try to get player data from session state first
+                            player_data = st.session_state.get('player_data_all')
+                            
+                            # If not in session, load from draft_results CSV (full player universe: 2600+ players)
+                            if player_data is None or player_data.empty:
+                                # Look for draft_results CSV files - these are the full player universe
+                                csv_files = glob.glob(f"draft_results_{league_info['league_id']}_*.csv")
+                                if csv_files:
+                                    # Load the most recent one
+                                    latest_csv = max(csv_files, key=os.path.getmtime)
+                                    player_data = pd.read_csv(latest_csv)
+                                    st.info(f"📁 Loaded full player universe from: {os.path.basename(latest_csv)} ({len(player_data)} players)")
+                            
+                            if player_data is not None and not player_data.empty:
+                                # Extract positions from player data (exclude UNK - will use position_x fallback)
+                                positions = sorted(player_data['position'].unique().tolist())
+                                positions = [p for p in positions if p not in ["", "UNK", None]]
+                                
+                                st.session_state['available_positions'] = positions
+                                
+                                # Build player_position_map with position_x fallback and normalization
+                                player_position_map = {}
+                                for _, row in player_data.iterrows():
+                                    player_name = row.get('name_x')
+                                    player_pos = row.get('position')
+                                    position_fallback = row.get('position_x')
+                                    
+                                    # Use position, or fall back to position_x if position is UNK
+                                    if player_name:
+                                        if player_pos and player_pos not in ["", "UNK", None]:
+                                            # Normal position - use as-is (already normalized)
+                                            if player_name not in player_position_map:
+                                                player_position_map[player_name] = set()
+                                            player_position_map[player_name].add(str(player_pos))
+                                        elif player_pos == "UNK" and position_fallback and position_fallback not in ["", None]:
+                                            # UNK player - use position_x fallback with normalization
+                                            if player_name not in player_position_map:
+                                                player_position_map[player_name] = set()
+                                            normalized_pos = normalize_position(position_fallback)
+                                            player_position_map[player_name].add(normalized_pos)
+                                
+                                st.session_state['player_position_map'] = player_position_map
+                                st.session_state['available_player_names'] = sorted(list(player_position_map.keys()))
+                                st.session_state['editing_league_id'] = league_info['league_id']
+                                st.success(f"✅ Loaded {len(positions)} positions and {len(player_position_map)} players")
+                            else:
+                                st.error("❌ No player data available. Make sure draft_results_{league_id}_*.csv exists or load Live Draft first.")
+                                return
+                        
+                        except Exception as e:
+                            st.error(f"❌ Error loading player data: {e}")
+                
                 # Edit keepers
                 st.write("### Update Keepers")
-                available_positions = st.session_state.get('available_positions', ["QB", "RB", "WR", "TE", "DEF", "K"])
+                
+                # Get positions and players from ESPN (already loaded above)
+                available_positions = st.session_state.get('available_positions', [])
                 player_position_map = st.session_state.get('player_position_map', {})
                 all_player_names = st.session_state.get('available_player_names', [])
+                
+                if not available_positions:
+                    st.error("❌ League positions not loaded. Please refresh the page.")
+                    return
+                
+                if not all_player_names:
+                    st.warning("⚠️ No players found in league. Make sure you loaded the config correctly.")
                 
                 updated_keepers = {}
                 draft_order = league_info['draft_order']
@@ -364,6 +457,9 @@ def show_configuration():
                 for team_idx, team in enumerate(draft_order):
                     with st.expander(f"**{team}** - Update Keepers"):
                         current_keepers = league_info['keepers'].get(team, [])
+                        
+                        st.caption(f"Current keepers: {len(current_keepers)}")
+                        
                         num_keepers = st.number_input(
                             f"Number of keepers for {team}",
                             min_value=0,
@@ -373,6 +469,10 @@ def show_configuration():
                             key=f"edit_num_keepers_{team}"
                         )
                         
+                        # Show warning if reducing keeper count
+                        if num_keepers < len(current_keepers):
+                            st.warning(f"⚠️ Reducing from {len(current_keepers)} to {num_keepers} keepers. Keepers beyond slot {num_keepers} will be removed.")
+                        
                         team_keepers = []
                         for k_idx in range(num_keepers):
                             col1, col2, col3 = st.columns(3)
@@ -380,11 +480,19 @@ def show_configuration():
                             # Get current keeper data if exists
                             current_keeper = current_keepers[k_idx] if k_idx < len(current_keepers) else None
                             
+                            # Get current position from keeper or default to first position
+                            current_position = current_keeper['position'] if current_keeper and 'position' in current_keeper else available_positions[0]
+                            if current_position not in available_positions:
+                                current_position = available_positions[0]
+                            
                             with col2:
+                                # Get safe index for selectbox
+                                default_pos_idx = available_positions.index(current_position)
+                                
                                 position = st.selectbox(
                                     "Position",
                                     available_positions,
-                                    index=available_positions.index(current_keeper['position']) if current_keeper and current_keeper['position'] in available_positions else 0,
+                                    index=default_pos_idx,
                                     key=f"edit_keeper_pos_{team}_{k_idx}",
                                     help="Select position to filter players"
                                 )
@@ -396,20 +504,28 @@ def show_configuration():
                                     if position in positions_set or not positions_set:
                                         position_players.append(player_name)
                                 position_players = sorted(position_players)
-                            else:
-                                position_players = all_player_names
+                            
+                            # If no players filtered by position, show all players as fallback
+                            if not position_players:
+                                position_players = sorted(all_player_names) if all_player_names else []
                             
                             with col1:
                                 default_player_idx = 0
-                                if current_keeper and current_keeper['player'] in position_players:
-                                    default_player_idx = position_players.index(current_keeper['player'])
+                                if current_keeper and current_keeper.get('player'):
+                                    if current_keeper['player'] in position_players:
+                                        default_player_idx = position_players.index(current_keeper['player'])
                                 
-                                player_name = st.selectbox(
-                                    "Player Name",
-                                    position_players,
-                                    index=default_player_idx,
-                                    key=f"edit_keeper_player_{team}_{k_idx}",
-                                )
+                                # Show player name or placeholder if no options
+                                if position_players:
+                                    player_name = st.selectbox(
+                                        "Player Name",
+                                        position_players,
+                                        index=default_player_idx,
+                                        key=f"edit_keeper_player_{team}_{k_idx}",
+                                    )
+                                else:
+                                    st.warning(f"No players available. Load config with 'Start New League Config' first.")
+                                    player_name = ""
                             
                             with col3:
                                 default_pick = current_keeper['pick'] if current_keeper else (k_idx * len(draft_order) + team_idx + 1)
@@ -431,8 +547,29 @@ def show_configuration():
                         
                         updated_keepers[team] = team_keepers
                 
+                # Show summary before saving
+                st.divider()
+                st.write("### Update Summary")
+                has_changes = False
+                for team in draft_order:
+                    current_keepers = league_info['keepers'].get(team, [])
+                    new_keepers = updated_keepers.get(team, [])
+                    
+                    if current_keepers != new_keepers:
+                        has_changes = True
+                        with st.expander(f"**{team}**: {len(current_keepers)} → {len(new_keepers)} keepers"):
+                            if new_keepers:
+                                st.write("**New keepers:**")
+                                for k in new_keepers:
+                                    st.caption(f"  • {k['player']} ({k['position']}) - Pick #{k['pick']}")
+                            else:
+                                st.caption("No keepers")
+                
+                if not has_changes:
+                    st.caption("💡 No changes detected. Modify keepers above to see summary.")
+                
                 # Save updated config
-                if st.button("💾 Save Updated Config", use_container_width=True):
+                if st.button("💾 Save Updated Config", use_container_width=True, disabled=not has_changes):
                     config['current_plan']['keepers'] = updated_keepers
                     ConfigManager.save_config(config, st.session_state['editing_config_file'])
                     st.session_state['editing_config_file'] = None
@@ -472,6 +609,33 @@ def show_configuration():
                     
                     # Set num_rounds for draft board
                     st.session_state['num_rounds'] = 21
+                    
+                    # Convert keepers to actual picks in player_data_all
+                    if st.session_state.get('player_data_all') is not None and league_info['keepers']:
+                        player_data = st.session_state['player_data_all'].copy()
+                        for team, keepers in league_info['keepers'].items():
+                            for keeper in keepers:
+                                # Find the player in player_data_all by name
+                                # Handle position matching with normalization
+                                keeper_name = keeper.get('player')
+                                keeper_pos = normalize_position(keeper.get('position'))
+                                
+                                player_match = player_data[player_data['name_x'] == keeper_name]
+                                
+                                if not player_match.empty:
+                                    # Find the first match where position matches either position or normalized position_x
+                                    for idx in player_match.index:
+                                        player_pos = player_data.loc[idx, 'position']
+                                        position_fallback = player_data.loc[idx, 'position_x']
+                                        normalized_fallback = normalize_position(position_fallback)
+                                        
+                                        # Check if keeper position matches either main position or normalized fallback
+                                        if (keeper_pos == player_pos) or (keeper_pos == normalized_fallback):
+                                            # Mark as picked by this team
+                                            player_data.loc[idx, 'owner'] = team
+                                            player_data.loc[idx, 'pick_number'] = keeper.get('pick', 0)
+                                            break
+                        st.session_state['player_data_all'] = player_data
                     
                     st.success(f"✅ Loaded: {selected_config}")
                     st.info("📝 **Next steps:** Go to 'Current Board' to start your practice draft")
