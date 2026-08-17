@@ -12,6 +12,7 @@ from consider_options import show_consider_options
 from current_plan import show_current_plan
 from configuration import show_configuration
 from config_manager import ConfigManager
+from position_status_bar import show_position_status_bar
 
 from espn_api.football import League
 
@@ -62,18 +63,30 @@ def load_config_on_startup():
     if st.session_state.get('config_loaded', False):
         return  # Already loaded
     
-    config = ConfigManager.get_latest_config()
+    try:
+        config = ConfigManager.get_latest_config()
+    except Exception as e:
+        import sys
+        print(f"Error loading config: {e}", file=sys.stderr)
+        config = None
+    
     if config:
-        league_info = ConfigManager.extract_league_info(config)
-        st.session_state['league_id'] = league_info['league_id']
-        st.session_state['season_id'] = league_info['season_id']
-        st.session_state['teams'] = league_info['draft_order']
-        st.session_state['my_team'] = league_info['my_team']
-        st.session_state['draft_order'] = league_info['draft_order']
-        st.session_state['keepers'] = league_info['keepers']
-        st.session_state['current_config_file'] = None  # Will be set after finding matching draft file
-        st.session_state['current_plan'] = config.get('current_plan', {})
-        st.session_state['config_loaded'] = True
+        try:
+            league_info = ConfigManager.extract_league_info(config)
+            st.session_state['league_id'] = league_info['league_id']
+            st.session_state['season_id'] = league_info['season_id']
+            st.session_state['teams'] = league_info['draft_order']
+            st.session_state['my_team'] = league_info['my_team']
+            st.session_state['draft_order'] = league_info['draft_order']
+            st.session_state['keepers'] = league_info['keepers']
+            st.session_state['config_filename'] = ConfigManager.get_latest_config_filename()  # Store config filename for persistence
+            st.session_state['current_config_file'] = None  # Will be set after finding matching draft file
+            st.session_state['current_plan'] = config.get('current_plan', {})
+            st.session_state['config_loaded'] = True
+        except Exception as e:
+            import sys
+            print(f"Error extracting league info from config: {e}", file=sys.stderr)
+            return
         
         # Fetch ESPN league info to populate slot_counts, position_colors, tier_baselines
         try:
@@ -235,6 +248,11 @@ def hide_enter_pick():
 
 def activate_enter_pick():
     st.session_state['show_enter_pick'] = True
+
+# Show position status bar on all pages (data guard prevents errors during config phase)
+show_position_status_bar()
+if st.session_state.get('player_data_all') is not None:
+    st.divider()  # Only show divider if status bar actually rendered
 
 if selected == "Current Board":
     if st.button("Enter Pick", use_container_width=True):

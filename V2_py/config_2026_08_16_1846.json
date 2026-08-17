@@ -1,0 +1,207 @@
+{
+  "league_id": 54926,
+  "season_id": 2026,
+  "draft_order": [
+    "Daytrippin  Raiders",
+    "Who Dey and The Blowfish",
+    "Balls Deep",
+    "ROOKIES AND BITCHES",
+    "#HereWeGo",
+    "TD Grab",
+    "Straight Cash Homie",
+    "Adam's Family",
+    "Gridiron Elite",
+    "Stripped Balls and Tight Ends"
+  ],
+  "my_team": "TD Grab",
+  "current_plan": {
+    "keepers": {
+      "Daytrippin  Raiders": [
+        {
+          "player": "Chase Brown",
+          "position": "RB",
+          "pick": 1
+        },
+        {
+          "player": "Travis Hunter",
+          "position": "WR",
+          "pick": 20
+        }
+      ],
+      "Who Dey and The Blowfish": [
+        {
+          "player": "De'Von Achane",
+          "position": "RB",
+          "pick": 2
+        },
+        {
+          "player": "Jack Campbell",
+          "position": "LB",
+          "pick": 19
+        }
+      ],
+      "Balls Deep": [
+        {
+          "player": "Ja'Marr Chase",
+          "position": "WR",
+          "pick": 3
+        },
+        {
+          "player": "Alex Highsmith",
+          "position": "DL",
+          "pick": 13
+        }
+      ],
+      "ROOKIES AND BITCHES": [
+        {
+          "player": "Bucky Irving",
+          "position": "RB",
+          "pick": 4
+        },
+        {
+          "player": "Andrew Van Ginkel",
+          "position": "DL",
+          "pick": 17
+        }
+      ],
+      "#HereWeGo": [
+        {
+          "player": "Bijan Robinson",
+          "position": "RB",
+          "pick": 5
+        },
+        {
+          "player": "Aidan Hutchinson",
+          "position": "DL",
+          "pick": 15
+        }
+      ],
+      "TD Grab": [
+        {
+          "player": "Javonte Williams",
+          "position": "RB",
+          "pick": 6
+        },
+        {
+          "player": "Cedric Gray",
+          "position": "LB",
+          "pick": 15
+        }
+      ],
+      "Straight Cash Homie": [
+        {
+          "player": "Jaxon Smith-Njigba",
+          "position": "WR",
+          "pick": 7
+        },
+        {
+          "player": "Jeffery Simmons",
+          "position": "DL",
+          "pick": 14
+        }
+      ],
+      "Adam's Family": [
+        {
+          "player": "Jonathan Taylor",
+          "position": "RB",
+          "pick": 8
+        },
+        {
+          "player": "Byron Young",
+          "position": "DL",
+          "pick": 18
+        }
+      ],
+      "Gridiron Elite": [
+        {
+          "player": "James Cook III",
+          "position": "RB",
+          "pick": 9
+        },
+        {
+          "player": "Foyesade Oluokun",
+          "position": "LB",
+          "pick": 12
+        }
+      ],
+      "Stripped Balls and Tight Ends": [
+        {
+          "player": "Jahmyr Gibbs",
+          "position": "RB",
+          "pick": 10
+        },
+        {
+          "player": "Jordyn Brooks",
+          "position": "LB",
+          "pick": 20
+        }
+      ]
+    },
+    "drafted_players": [],
+    "planned_picks": []
+  },
+  "strategy": {
+    "QB": [
+      7
+    ],
+    "RB": [
+      3
+    ],
+    "TE": [
+      5
+    ],
+    "WR": [
+      4
+    ]
+  },
+  "plan": [
+    {
+      "round": 3,
+      "position": "RB",
+      "target_player": "Derrick Henry",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 4,
+      "position": "WR",
+      "target_player": "Drake London",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 5,
+      "position": "TE",
+      "target_player": "Brock Bowers",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 6,
+      "position": "QB",
+      "target_player": "Patrick Mahomes",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 7,
+      "position": "RB",
+      "target_player": "Chuba Hubbard",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 8,
+      "position": "WR",
+      "target_player": "Courtland Sutton",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 9,
+      "position": "WR",
+      "target_player": "Jerry Jeudy",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 10,
+      "position": "QB",
+      "target_player": "Dak Prescott",
+      "status": "ACTIVE"
+    }
+  ]
+}

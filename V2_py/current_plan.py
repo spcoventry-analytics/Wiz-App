@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from config_manager import ConfigManager
 
 def show_current_plan():
     st.title("Current Plan")
@@ -14,431 +15,51 @@ def show_current_plan():
     tier_baselines = st.session_state.get('tier_baselines', {})
     your_team_default = st.session_state.get('my_team', draft_order[0] if draft_order else None)
     num_teams = len(draft_order) if draft_order else 1
+    config_filename = st.session_state.get('config_filename')
+    
+    # Load strategy and plan from config on page load
+    if config_filename and 'loaded_strategy' not in st.session_state:
+        try:
+            loaded_strategy = ConfigManager.load_strategy(config_filename)
+            # Populate session_state with loaded strategy
+            for pos, rounds in loaded_strategy.items():
+                st.session_state[f'target_rounds_{pos}'] = rounds
+            st.session_state['loaded_strategy'] = True
+        except:
+            st.session_state['loaded_strategy'] = False
+    
+    if config_filename and 'loaded_plan' not in st.session_state:
+        try:
+            loaded_plan = ConfigManager.load_plan(config_filename)
+            st.session_state['draft_plan'] = loaded_plan
+            
+            # Initialize plan_picks dict if not present
+            if 'plan_picks' not in st.session_state:
+                st.session_state['plan_picks'] = {}
+            
+            # Convert loaded plan list to plan_picks dict by round
+            for pick in loaded_plan:
+                round_num = pick.get('round')
+                if round_num:
+                    st.session_state['plan_picks'][round_num] = pick
+                    # Also populate position state for proper defaults
+                    position = pick.get('position')
+                    if position:
+                        st.session_state[f'plan_pos_{round_num}'] = position
+            
+            st.session_state['loaded_plan'] = True
+        except:
+            st.session_state['loaded_plan'] = False
     
     if player_data_all is None or player_data_all.empty:
         st.warning("No player data available.")
         return
     
-    # === CREATE TABS: BUILD PLAN vs SCARCITY vs STRATEGY ===
-    tab_scarcity, tab_strategy, tab_build = st.tabs(["📊 Position Scarcity", "🔍 Build a Strategy", "🎯 Build Plan"])
+    # === CREATE TABS: BUILD STRATEGY → BUILD PLAN → HYPOTHETICAL ROSTER ===
+    tab_strategy, tab_build, tab_roster = st.tabs(["🔍 Build a Strategy", "🎯 Build Plan", "📊 Hypothetical Roster"])
     
     # ============================================================================
-    # === TAB 3: BUILD PLAN (ROUND STRATEGY) ===
-    # ============================================================================
-    with tab_build:
-        st.write("**Build Your Draft Plan - Execute Strategy**")
-        st.write("*Review your strategy targets and confirm the position to draft each round.*")
-        
-        # Show strategy targets from Build a Strategy tab
-        strategy_targets = {}
-        for pos in ['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DB']:
-            target_rounds = st.session_state.get(f'target_rounds_{pos}', [])
-            if target_rounds:
-                strategy_targets[pos] = sorted(target_rounds)
-        
-        if strategy_targets:
-            st.info("📌 **Strategy Targets** (from Build a Strategy tab):")
-            for pos, rounds in sorted(strategy_targets.items(), key=lambda x: x[1][0] if x[1] else 99):
-                st.caption(f"  🎯 **{pos}**: Rounds {', '.join(map(str, rounds))}")
-        else:
-            st.caption("💡 No strategy targets set yet. Go to 'Build a Strategy' tab to set position targets for specific rounds.")
-        
-        st.divider()
-        
-        # Initialize hypothetical picks in session state if not present
-        if 'hypothetical_picks' not in st.session_state:
-            st.session_state['hypothetical_picks'] = {}
-        
-        # Get available players (not yet drafted)
-        available_players = player_data_all[player_data_all["pick_number"] == 0].copy()
-        
-        # Add positions to available data for this tab
-        available_players_strategy = available_players.copy()
-        # Drop players without ADP (they can't be assigned to a draft round)
-        available_players_strategy = available_players_strategy.dropna(subset=['adp', 'points'])
-        
-        if available_players_strategy.empty:
-            st.warning("No players with ADP data available for round strategy.")
-            # Show scarcity tab instead
-            st.info("Go to 'Position Scarcity' tab to see position urgency analysis.")
-        
-        available_players_strategy['draft_round'] = (np.ceil(available_players_strategy['adp'] / num_teams)).fillna(1).astype(int)
-        available_players_strategy['draft_round'] = available_players_strategy['draft_round'].clip(lower=1, upper=21)
-        
-        # Get available positions
-        available_positions_list = sorted(available_players_strategy['position'].unique())
-        
-        # Create a 3-column layout for round selection (for mobile/tablet)
-        st.write("**Select Position for Each Round:**")
-        
-        # Use columns to organize selectors in a grid
-        cols = st.columns(3)
-        for round_num in range(1, 22):
-            col_idx = (round_num - 1) % 3
-            
-            with cols[col_idx]:
-                selected_pos = st.selectbox(
-                    f"Round {round_num}",
-                    ["—"] + available_positions_list,
-                    key=f"round_{round_num}_pos",
-                    index=0
-                )
-                
-                # If a position is selected for this round, find the best player
-                if selected_pos != "—":
-                    # Find players at this position in this draft round
-                    round_players = available_players_strategy[
-                        (available_players_strategy['position'] == selected_pos) &
-                        (available_players_strategy['draft_round'] == round_num)
-                    ].sort_values('POS_Value_Normalized', ascending=False) if 'POS_Value_Normalized' in available_players_strategy.columns else available_players_strategy[
-                        (available_players_strategy['position'] == selected_pos) &
-                        (available_players_strategy['draft_round'] == round_num)
-                    ]
-                    
-                    if not round_players.empty:
-                        best_player = round_players.iloc[0]
-                        st.session_state['hypothetical_picks'][round_num] = {
-                            'position': selected_pos,
-                            'player_name': best_player['name_x'],
-                            'player_id': best_player.get('espn_id', ''),
-                            'points': best_player.get('points', 0),
-                            'ppg': best_player.get('PPG', 0),
-                            'norm_value': best_player.get('POS_Value_Normalized', 0)
-                        }
-                        
-                        # Display the selected player
-                        st.write(f"📍 **{best_player['name_x']}**")
-                        st.caption(f"{best_player.get('points', 0):.0f} pts | {best_player.get('POS_Value_Normalized', 0):.2f} norm val")
-                    else:
-                        st.caption("No players available in this round")
-                else:
-                    # Remove from hypothetical if deselected
-                    if round_num in st.session_state['hypothetical_picks']:
-                        del st.session_state['hypothetical_picks'][round_num]
-        
-        # Show hypothetical roster summary
-        if st.session_state['hypothetical_picks']:
-            st.divider()
-            st.write("**Draft Plan Summary:**")
-            
-            hyp_picks = st.session_state['hypothetical_picks']
-            total_points = sum(p['points'] for p in hyp_picks.values())
-            avg_norm_val = np.mean([p['norm_value'] for p in hyp_picks.values()]) if hyp_picks else 0
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Points", f"{total_points:.0f}")
-            with col2:
-                st.metric("Avg Norm Value", f"{avg_norm_val:.2f}")
-            with col3:
-                st.metric("Picks Selected", len(hyp_picks))
-            
-            # Show roster table
-            roster_rows = []
-            for round_num in sorted(hyp_picks.keys()):
-                pick = hyp_picks[round_num]
-                roster_rows.append({
-                    'Round': round_num,
-                    'Position': pick['position'],
-                    'Player': pick['player_name'],
-                    'Points': round(pick['points'], 1),
-                    'PPG': round(pick['ppg'], 2),
-                    'Norm Value': round(pick['norm_value'], 2)
-                })
-            
-            roster_df = pd.DataFrame(roster_rows)
-            st.dataframe(roster_df, use_container_width=True, hide_index=True)
-            
-            if st.button("🗑️ Clear All Selections"):
-                st.session_state['hypothetical_picks'] = {}
-                st.rerun()
-    
-    # ============================================================================
-    # === TAB 1: POSITION SCARCITY ===
-    # ============================================================================
-    with tab_scarcity:
-        st.write("**Position Scarcity Analysis** — Your Team's Draft Urgency")
-        
-        # Debug: show slot_counts for troubleshooting
-        with st.expander("🔧 Debug: League Configuration"):
-            st.write(f"**slot_counts:** {slot_counts}")
-            st.write(f"**num_teams:** {num_teams}")
-            st.write(f"**tier_baselines keys:** {list(tier_baselines.keys())}")
-        
-        # Always analyze YOUR TEAM
-        team_to_analyze = st.session_state.get('my_team', your_team_default)
-        st.caption(f"📍 Analyzing: **{team_to_analyze}**")
-        
-        # Get picks made by your team
-        team_picks = player_data_all[(player_data_all['pick_number'] > 0) & (player_data_all['owner'] == team_to_analyze)]
-        
-        # Count filled slots by position (BASE positions only, not including FLEX)
-        filled_by_position = {}
-        for pos in slot_counts.keys():
-            if pos not in ["IR", "", "FLEX", "BENCH", "BE"]:
-                filled_by_position[pos] = len(team_picks[team_picks['position'] == pos])
-        
-        # Available players (not yet drafted)
-        available_players_scarcity = player_data_all[player_data_all["pick_number"] == 0]
-        
-        if available_players_scarcity.empty:
-            st.warning("No available players remaining!")
-        else:
-            # Explanatory notes in expander (not intrusive on mobile)
-            with st.expander("ℹ️ How to read this table"):
-                st.write("""
-                - **Tier** = which slot you're filling (RB1=1st RB slot, RB2=2nd RB slot, etc.)
-                - **Baseline** = average PPG of that tier from the full player pool at draft start
-                - **Value** = Player's PPG minus baseline (anything >0 is above average, >1 is significantly above)
-                - **Starters Left** = available players ABOVE this tier's baseline (true starter quality)
-                - **Drafted (ADP≤Best)** = competitors' picks at this position with ADP ≤ best available (scarcity indicator)
-                - 🔴 **CRITICAL**: Not enough starters for remaining slots or very scarce
-                - 🟠 **HIGH**: Multiple empty slots or high scarcity
-                - 🟡 **MEDIUM**: One empty slot + moderate scarcity
-                - 🟢 **LOW**: Slots filled or abundant starters
-                """)
-            
-            st.write("")
-            
-            # Calculate position urgency for BASE positions only (not including FLEX capacity)
-            position_analysis = []
-            
-            # Process BASE positions (RB, WR, TE, QB, etc.) WITHOUT FLEX capacity
-            # Only show positions that are actually active in this league (slot_counts > 0)
-            for pos in slot_counts.keys():
-                # Filter out non-active positions: bench, flex, IR, empty, composite positions
-                if pos in ["IR", "", "FLEX", "BENCH", "BE"] or "/" in pos:
-                    continue
-                
-                total_slots = slot_counts.get(pos, 0)
-                if total_slots == 0:
-                    # Skip positions not in this league
-                    continue
-                filled_slots = filled_by_position.get(pos, 0)
-                empty_slots = total_slots - filled_slots
-                
-                # Determine which tier we're currently drafting from (based on filled slots)
-                current_tier = filled_slots
-                
-                # Get available players at this position
-                pos_players = available_players_scarcity[available_players_scarcity['position'] == pos].sort_values('PPG', ascending=False)
-                
-                # Get tier baseline for current tier
-                tier_baseline = 0
-                if pos in tier_baselines and current_tier in tier_baselines[pos]:
-                    tier_baseline = tier_baselines[pos][current_tier]
-                
-                # Count available players ABOVE this tier's baseline
-                available_above_tier = len(pos_players[pos_players['PPG'] >= tier_baseline]) if tier_baseline > 0 else len(pos_players)
-                
-                # Best available at this position
-                best_available = pos_players.iloc[0] if len(pos_players) > 0 else None
-                best_available_value = 0
-                if best_available is not None:
-                    best_available_value = best_available['PPG'] - tier_baseline
-                
-                # Calculate ELASTICITY: value cost if we wait one round
-                # (how much PPG do we lose by skipping this position now?)
-                next_round_available = pos_players.iloc[num_teams] if len(pos_players) > num_teams else None
-                elasticity = 0
-                if best_available is not None and next_round_available is not None:
-                    elasticity = round(best_available['PPG'] - next_round_available['PPG'], 1)
-                elif best_available is not None and len(pos_players) > 0:
-                    # If not enough players for full round, use average drop to next available
-                    elasticity = round(best_available['PPG'] - pos_players.iloc[min(1, len(pos_players)-1)]['PPG'], 1)
-                
-                # ADP-aware scarcity: only count drafted players with ADP <= best_available's ADP
-                adp_aware_drafted = 0
-                if best_available is not None and pd.notna(best_available.get('adp')):
-                    best_available_adp = best_available['adp']
-                    adp_aware_drafted = len(player_data_all[
-                        (player_data_all['position'] == pos) & 
-                        (player_data_all['pick_number'] > 0) &
-                        (player_data_all['adp'] <= best_available_adp)
-                    ])
-                    scarcity_ratio = adp_aware_drafted / num_teams if num_teams > 0 else 0
-                else:
-                    scarcity_ratio = 0
-                
-                # Urgency: PRIMARY = Elasticity (value cliff), SECONDARY = empty slots needed
-                # High elasticity means steep drop-off if you wait → CRITICAL
-                # Low elasticity means gentle drop-off → can afford to wait
-                
-                if elasticity > 5.0 and empty_slots > 0:
-                    # High cliff + need to fill slots = CRITICAL
-                    urgency_score = 2.5
-                elif elasticity > 3.0 and empty_slots > 0:
-                    # Steep cliff + need to fill = HIGH
-                    urgency_score = 1.5
-                elif elasticity > 1.5 and empty_slots > 0:
-                    # Moderate cliff + need to fill = MEDIUM
-                    urgency_score = 1.0
-                elif elasticity > 0.5 and empty_slots > 0:
-                    # Gentle cliff + need to fill = LOW but watch
-                    urgency_score = 0.5
-                else:
-                    # Very flat cliff or no needs = RELAXED
-                    urgency_score = 0.2
-                
-                # Also factor in scarcity: if running out of starters, boost urgency
-                if available_above_tier <= empty_slots:
-                    urgency_score += 0.8  # Running out of starters - boost priority
-                
-                # Always show position (not filtered by urgency), prioritized in sorted table
-                position_analysis.append({
-                    'Position': pos,
-                    'Slots': f"{filled_slots}/{total_slots}",
-                    'Empty': empty_slots,
-                    'Tier': current_tier + 1,  # Display 1-indexed
-                    'Baseline': round(tier_baseline, 1),
-                    'Best Available': best_available['name_x'] if best_available is not None else 'NONE',
-                    'PPG': round(best_available['PPG'], 1) if best_available is not None else 0,
-                    'Value': round(best_available_value, 1),
-                    'Elasticity': elasticity,  # PPG cost if you wait 1 round
-                    'ADP': round(best_available['adp'], 0) if best_available is not None and pd.notna(best_available.get('adp')) else 'N/A',
-                    'Starters Left': available_above_tier,
-                    'Drafted (ADP≤Best)': adp_aware_drafted,
-                    'Scarcity %': f"{int(scarcity_ratio * 100)}%",
-                    'Urgency': urgency_score,
-                })
-            
-            # Debug: check if position_analysis has data
-            if not position_analysis:
-                st.warning(f"⚠️ No position data found. slot_counts keys: {list(slot_counts.keys())}")
-            else:
-                # Debug: show what was calculated for each position
-                with st.expander("🔧 Debug: Position Analysis Data"):
-                    st.write(f"**Tier Baselines loaded:** {tier_baselines.keys()}")
-                    st.write(f"**Position Analysis entries:** {len(position_analysis)}")
-                    for item in position_analysis:
-                        st.write(f"**{item['Position']}**: Baseline={item['Baseline']}, Best={item['Best Available']}, PPG={item['PPG']}, Value={item['Value']}, Elasticity={item['Elasticity']}, Urgency={item['Urgency']:.2f}, Slots={item['Slots']}, Tier={item['Tier']}")
-                
-                # Sort by urgency (highest first = most critical to address)
-                position_priority = pd.DataFrame(position_analysis).sort_values('Urgency', ascending=False)
-                
-                # Display position priority
-                st.write(f"### Position Priority for **{team_to_analyze}**")
-                
-                # Color coded display with View button
-                for idx, row in position_priority.iterrows():
-                    pos_color = position_colors.get(row['Position'], '#CCCCCC')
-                    urgency_val = row['Urgency']
-                    
-                    if urgency_val > 1.5:
-                        priority_level = "🔴 CRITICAL"
-                    elif urgency_val > 1.0:
-                        priority_level = "🟠 HIGH"
-                    elif urgency_val > 0.5:
-                        priority_level = "🟡 MEDIUM"
-                    else:
-                        priority_level = "🟢 LOW"
-                    
-                    col1, col2, col3, col4, col5 = st.columns([0.7, 2, 1.8, 1.2, 1])
-                    
-                    with col1:
-                        st.markdown(f"<div style='background-color:{pos_color}; padding:8px; border-radius:4px; text-align:center; font-weight:bold; color:white;'>{row['Position']}</div>", unsafe_allow_html=True)
-                    
-                    with col2:
-                        st.write(f"**{row['Best Available']}** | {row['PPG']} PPG")
-                        elasticity_text = f"Elasticity: {row['Elasticity']:.1f}" if row['Elasticity'] > 0 else "Elasticity: N/A"
-                        st.write(f"*Value: {row['Value']:+.1f} | Tier {int(row['Tier'])} base: {row['Baseline']} | {elasticity_text}*")
-                    
-                    with col3:
-                        st.write(f"Slots: {row['Slots']}")
-                        st.write(f"Starters: {row['Starters Left']} | Scarcity: {row['Scarcity %']}")
-                    
-                    with col4:
-                        st.write(priority_level)
-                    
-                    with col5:
-                        if st.button("📊", key=f"view_{row['Position']}_{idx}", help="View players at this position"):
-                            pass  # Placeholder for view action
-            
-                # Show team's current roster (actual picks made)
-                st.divider()
-                st.write(f"### {team_to_analyze}'s Draft Picks")
-                
-                if not team_picks.empty:
-                    # Build roster with tier baselines
-                    roster_rows = []
-                    total_ppg = 0
-                    total_marg_val = 0
-                    
-                    # Sort by pick number to show draft order
-                    team_picks_sorted = team_picks.sort_values('pick_number')
-                    
-                    for idx, pick in team_picks_sorted.iterrows():
-                        pos = pick['position']
-                        
-                        # Find which slot number this is for this position
-                        pos_picks_before = len(team_picks_sorted[(team_picks_sorted['position'] == pos) & (team_picks_sorted['pick_number'] < pick['pick_number'])])
-                        slot_num = pos_picks_before + 1
-                        slot_label = f"{pos}{slot_num}"
-                        
-                        # Get tier baseline for this slot
-                        tier_baseline = 0
-                        if pos in tier_baselines and (slot_num - 1) in tier_baselines[pos]:
-                            tier_baseline = tier_baselines[pos][slot_num - 1]
-                        
-                        # Calculate marginal value (PPG - baseline)
-                        # Handle NaN PPG values (defensive/IDP players without projections)
-                        player_ppg = pick['PPG']
-                        if pd.isna(player_ppg):
-                            player_ppg = 0  # Default to 0 for players without PPG data
-                        
-                        marginal_value = player_ppg - tier_baseline
-                        
-                        # Total projected points (PPG * 17 games)
-                        total_fpts = player_ppg * 17
-                        
-                        roster_rows.append({
-                            'Slot': pos,
-                            'S#': slot_label,
-                            'Player': pick['name_x'],
-                            'Pick #': int(pick['pick_number']),
-                            'FPTS': round(total_fpts, 1),
-                            'PPG': round(player_ppg, 1),
-                            'Marg Val': round(marginal_value, 1),
-                            'Baseline': round(tier_baseline, 1),
-                        })
-                        total_ppg += player_ppg
-                        total_marg_val += marginal_value
-                    
-                    roster_df = pd.DataFrame(roster_rows)
-                    
-                    # Display as formatted table
-                    st.dataframe(
-                        roster_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            'Slot': st.column_config.TextColumn(width="small"),
-                            'S#': st.column_config.TextColumn(width="small"),
-                            'Pick #': st.column_config.NumberColumn(format="%d", width="small"),
-                            'Player': st.column_config.TextColumn(width="large"),
-                            'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
-                            'PPG': st.column_config.NumberColumn(format="%.1f", width="small"),
-                            'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
-                            'Baseline': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        }
-                    )
-                    
-                    # Summary stats
-                    st.write("")
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total PPG", round(total_ppg, 1))
-                    with col2:
-                        st.metric("Avg Marg Val", round(total_marg_val / len(roster_df), 2) if len(roster_df) > 0 else 0)
-                    with col3:
-                        st.metric("Total Marg Val", round(total_marg_val, 1))
-                    with col4:
-                        st.metric("Picks Made", len(team_picks))
-                else:
-                    st.write(f"No picks made yet.")
-    
-    # ============================================================================
-    # === TAB 2: BUILD A STRATEGY (POINT RANGES BY ROUND - FROM OLD CONSIDER_OPTIONS) ===
+    # === TAB 1: BUILD A STRATEGY (POINT RANGES BY ROUND) ===
     # ============================================================================
     with tab_strategy:
         st.write("**Strategy Builder: Point Ranges by Draft Round**")
@@ -558,7 +179,7 @@ def show_current_plan():
                         hoverlabel=dict(bgcolor="white", font_size=12),
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"strategy_chart_{pos}")
                 
                 with col_control:
                     st.write("")  # Spacing
@@ -576,5 +197,593 @@ def show_current_plan():
                         st.success(f"🎯 {pos} targets: Rounds {', '.join(map(str, sorted(target_rounds)))}")
                     else:
                         st.caption("Select rounds ↑")
+            
+            # Save strategy to config after all positions are selected
+            if config_filename:
+                st.divider()
+                if st.button("💾 Save Strategy to Config", use_container_width=True):
+                    strategy = {}
+                    for pos in positions_to_show:
+                        rounds = st.session_state.get(f'target_rounds_{pos}', [])
+                        if rounds:
+                            strategy[pos] = sorted(rounds)
+                    
+                    if strategy:
+                        ConfigManager.save_strategy(config_filename, strategy)
+                        st.success(f"✅ Strategy saved! {len(strategy)} positions configured.")
+                    else:
+                        st.warning("No positions selected yet. Select at least one round per position.")
+    
+    # ============================================================================
+    # === TAB 2: BUILD PLAN ===
+    # ============================================================================
+    with tab_build:
+        st.write("**Build Your Draft Plan**")
+        st.write("*Expand each round to select a position and target player. Strategy targets will be highlighted.*")
+        
+        # Get available players
+        available_players = player_data_all[player_data_all["pick_number"] == 0].copy()
+        available_players = available_players.dropna(subset=['adp', 'points'])
+        available_players['draft_round'] = (np.ceil(available_players['adp'] / num_teams)).fillna(1).astype(int)
+        available_players['draft_round'] = available_players['draft_round'].clip(lower=1, upper=21)
+        
+        # Get strategy targets
+        strategy_targets = {}
+        for pos in ['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DB']:
+            target_rounds = st.session_state.get(f'target_rounds_{pos}', [])
+            if target_rounds:
+                strategy_targets[pos] = sorted(target_rounds)
+        
+        # Initialize plan picks if not present
+        if 'plan_picks' not in st.session_state:
+            st.session_state['plan_picks'] = {}
+        
+        # All possible positions (not just available)
+        all_positions = ['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DB']
+        
+        # Get keeper rounds to skip for my team
+        keepers_dict = st.session_state.get('keepers', {})
+        my_team = st.session_state.get('my_team')
+        keeper_rounds = set()
+        
+        if my_team and my_team in keepers_dict:
+            my_team_keepers = keepers_dict[my_team]
+            for keeper in my_team_keepers:
+                # Calculate round from pick number: round = ceil(pick / num_teams)
+                pick_num = keeper.get('pick', 0)
+                if pick_num > 0:
+                    keeper_round = int(np.ceil(pick_num / num_teams))
+                    keeper_rounds.add(keeper_round)
+        
+        # Render expandable rows for each round
+        for round_num in range(1, 22):
+            # Skip keeper rounds for my team
+            if round_num in keeper_rounds:
+                continue
+            
+            pick_key = f'plan_round_{round_num}'
+            assigned_pick = st.session_state.get('plan_picks', {}).get(round_num)
+            assigned_pos = assigned_pick.get('position') if assigned_pick else None
+            
+            # Check if this round was targeted in strategy
+            strategy_pos_for_round = None
+            for pos, target_rounds in strategy_targets.items():
+                if round_num in target_rounds:
+                    strategy_pos_for_round = pos
+                    break
+            
+            # Determine default position: assigned > strategy > QB
+            if assigned_pos:
+                current_pos = assigned_pos
+            elif strategy_pos_for_round:
+                current_pos = strategy_pos_for_round
+            else:
+                current_pos = st.session_state.get(f'plan_pos_{round_num}', 'QB')
+            
+            # Determine background color based on whether position assigned
+            row_label = f"Round {round_num}"
+            if assigned_pos:
+                row_label += f" — {assigned_pos}"
+                # Color the expander header
+                with st.expander(f"🎯 {row_label}", expanded=False):
+                    # Show strategy hint if different from assigned
+                    if strategy_pos_for_round and strategy_pos_for_round != assigned_pos:
+                        st.caption(f"💡 Strategy suggested: {strategy_pos_for_round}")
+                    
+                    # Position selection with radio buttons
+                    st.write("**Select Position:**")
+                    
+                    selected_pos = st.radio(
+                        f"Position for Round {round_num}",
+                        all_positions,
+                        index=all_positions.index(current_pos) if current_pos in all_positions else 0,
+                        key=f"plan_pos_{round_num}",
+                        horizontal=True,
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Filter players based on position type
+                    if selected_pos in ['LB', 'DL', 'DB']:
+                        # Defense: no round filtering (no ADP data), just top 15 by PPG
+                        round_range_players = available_players[
+                            (available_players['position'] == selected_pos) &
+                            (available_players['pick_number'] == 0)  # Only undrafted
+                        ].copy()
+                        
+                        # Sort by PPG descending and take top 15 (fill NaN PPG with 0 for sorting)
+                        if not round_range_players.empty:
+                            round_range_players = round_range_players.fillna({'PPG': 0}).sort_values('PPG', ascending=False).head(15)
+                    else:
+                        # Offense: filter by round (±1) - only undrafted players
+                        round_range_players = available_players[
+                            (available_players['position'] == selected_pos) &
+                            (available_players['draft_round'] >= max(1, round_num - 1)) &
+                            (available_players['draft_round'] <= min(21, round_num + 1)) &
+                            (available_players['pick_number'] == 0)  # Only undrafted
+                        ].copy()
+                        
+                        # If no players found, broaden range to ±3 rounds
+                        if round_range_players.empty:
+                            round_range_players = available_players[
+                                (available_players['position'] == selected_pos) &
+                                (available_players['draft_round'] >= max(1, round_num - 3)) &
+                                (available_players['draft_round'] <= min(21, round_num + 3)) &
+                                (available_players['pick_number'] == 0)  # Only undrafted
+                            ].copy()
+                    
+                    # For offensive positions, show gold mine plot
+                    if selected_pos in ['QB', 'RB', 'WR', 'TE']:
+                        if not round_range_players.empty:
+                            st.write("**Players Available in Rounds {}-{} by Value:**".format(
+                                max(1, round_num - 1), min(21, round_num + 1)
+                            ))
+                            
+                            # Create scatter plot (gold mine)
+                            round_range_players_clean = round_range_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points'])
+                            
+                            if not round_range_players_clean.empty:
+                                round_range_players_clean = round_range_players_clean.sort_values('PPG', ascending=False).head(8)
+                                round_range_players_clean = round_range_players_clean.sort_values('points', ascending=True)
+                                
+                                color = position_colors.get(selected_pos, '#1f77b4')
+                                error_minus = round_range_players_clean['points'] - round_range_players_clean['floor']
+                                error_plus = round_range_players_clean['ceiling'] - round_range_players_clean['points']
+                                
+                                fig = go.Figure()
+                                
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x=round_range_players_clean['points'],
+                                        y=round_range_players_clean['name_x'],
+                                        mode='markers',
+                                        marker=dict(
+                                            size=12,
+                                            color=color,
+                                            line=dict(color='white', width=1.5)
+                                        ),
+                                        error_x=dict(
+                                            type='data',
+                                            symmetric=False,
+                                            array=error_plus,
+                                            arrayminus=error_minus,
+                                            color=color,
+                                            thickness=2.5,
+                                            width=6,
+                                        ),
+                                        customdata=round_range_players_clean[['PPG', 'floor', 'ceiling', 'adp']],
+                                        hovertemplate=(
+                                            "<b>%{y}</b><br>"
+                                            "Points: %{x:.1f}<br>"
+                                            "Range: %{customdata[1]:.0f} - %{customdata[2]:.0f}<br>"
+                                            "PPG: %{customdata[0]:.2f}<br>"
+                                            "ADP: %{customdata[3]:.1f}"
+                                            "<extra></extra>"
+                                        ),
+                                        showlegend=False,
+                                    )
+                                )
+                                
+                                fig.update_layout(
+                                    title=f"<b>{selected_pos}</b> — Value by Points",
+                                    xaxis_title="Projected Points",
+                                    yaxis_title="Player",
+                                    height=300,
+                                    template='plotly_white',
+                                    margin=dict(l=150, r=40, t=50, b=50),
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True, key=f"gold_mine_assigned_{round_num}")
+                    
+                    # Player selection dropdown (filtered by round and position)
+                    st.write("**Select Target Player:**")
+                    
+                    if selected_pos in ['LB', 'DL', 'DB']:
+                        # Defense: sorted by PPG descending (already sorted above)
+                        player_list = round_range_players.sort_values('PPG', ascending=False)
+                    else:
+                        # Offense: sort by PPG (value)
+                        player_list = round_range_players.sort_values('PPG', ascending=False)
+                    
+                    if not player_list.empty:
+                        player_options = player_list['name_x'].tolist()
+                        default_player = assigned_pick.get('target_player') if assigned_pick else None
+                        default_idx = player_options.index(default_player) if default_player in player_options else 0
+                        
+                        selected_player = st.selectbox(
+                            "Player",
+                            player_options,
+                            index=default_idx,
+                            key=f"plan_player_{round_num}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Save button
+                        if st.button(f"💾 Save Round {round_num} Plan", key=f"save_plan_{round_num}", use_container_width=True):
+                            st.session_state['plan_picks'][round_num] = {
+                                'round': round_num,
+                                'position': selected_pos,
+                                'target_player': selected_player,
+                                'status': 'ACTIVE'
+                            }
+                            
+                            # Save to config
+                            if config_filename:
+                                plan_list = list(st.session_state['plan_picks'].values())
+                                ConfigManager.save_plan(config_filename, plan_list)
+                            
+                            st.success(f"✅ Round {round_num}: {selected_pos} → {selected_player}")
+                            st.rerun()
+                    else:
+                        st.warning(f"No {selected_pos} players available for this round range.")
+            else:
+                # Not yet assigned, show as collapsed
+                label_hint = row_label
+                if strategy_pos_for_round:
+                    label_hint += f" → 🎯 {strategy_pos_for_round}"
+                with st.expander(f"⭕ {label_hint}", expanded=False):
+                    # Show strategy suggestion
+                    if strategy_pos_for_round:
+                        st.caption(f"📌 Strategy suggests: **{strategy_pos_for_round}** for this round")
+                    
+                    # Position selection with radio buttons
+                    st.write("**Select Position:**")
+                    
+                    selected_pos = st.radio(
+                        f"Position for Round {round_num}",
+                        all_positions,
+                        index=all_positions.index(current_pos) if current_pos in all_positions else 0,
+                        key=f"plan_pos_{round_num}",
+                        horizontal=True,
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Filter players based on position type
+                    if selected_pos in ['LB', 'DL', 'DB']:
+                        # Defense: no round filtering (no ADP data), just top 15 by PPG
+                        round_range_players = available_players[
+                            (available_players['position'] == selected_pos) &
+                            (available_players['pick_number'] == 0)  # Only undrafted
+                        ].copy()
+                        
+                        # Sort by PPG descending and take top 15 (fill NaN PPG with 0 for sorting)
+                        if not round_range_players.empty:
+                            round_range_players = round_range_players.fillna({'PPG': 0}).sort_values('PPG', ascending=False).head(15)
+                    else:
+                        # Offense: filter by round (±1) - only undrafted players
+                        round_range_players = available_players[
+                            (available_players['position'] == selected_pos) &
+                            (available_players['draft_round'] >= max(1, round_num - 1)) &
+                            (available_players['draft_round'] <= min(21, round_num + 1)) &
+                            (available_players['pick_number'] == 0)  # Only undrafted
+                        ].copy()
+                        
+                        # If no players found, broaden range to ±3 rounds
+                        if round_range_players.empty:
+                            round_range_players = available_players[
+                                (available_players['position'] == selected_pos) &
+                                (available_players['draft_round'] >= max(1, round_num - 3)) &
+                                (available_players['draft_round'] <= min(21, round_num + 3)) &
+                                (available_players['pick_number'] == 0)  # Only undrafted
+                            ].copy()
+                    
+                    # For offensive positions, show gold mine plot
+                    if selected_pos in ['QB', 'RB', 'WR', 'TE']:
+                        if not round_range_players.empty:
+                            st.write("**Players Available in Rounds {}-{} by Value:**".format(
+                                max(1, round_num - 1), min(21, round_num + 1)
+                            ))
+                            
+                            # Create scatter plot (gold mine)
+                            round_range_players_clean = round_range_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points'])
+                            
+                            if not round_range_players_clean.empty:
+                                round_range_players_clean = round_range_players_clean.sort_values('PPG', ascending=False).head(8)
+                                round_range_players_clean = round_range_players_clean.sort_values('points', ascending=True)
+                                
+                                color = position_colors.get(selected_pos, '#1f77b4')
+                                error_minus = round_range_players_clean['points'] - round_range_players_clean['floor']
+                                error_plus = round_range_players_clean['ceiling'] - round_range_players_clean['points']
+                                
+                                fig = go.Figure()
+                                
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x=round_range_players_clean['points'],
+                                        y=round_range_players_clean['name_x'],
+                                        mode='markers',
+                                        marker=dict(
+                                            size=12,
+                                            color=color,
+                                            line=dict(color='white', width=1.5)
+                                        ),
+                                        error_x=dict(
+                                            type='data',
+                                            symmetric=False,
+                                            array=error_plus,
+                                            arrayminus=error_minus,
+                                            color=color,
+                                            thickness=2.5,
+                                            width=6,
+                                        ),
+                                        customdata=round_range_players_clean[['PPG', 'floor', 'ceiling', 'adp']],
+                                        hovertemplate=(
+                                            "<b>%{y}</b><br>"
+                                            "Points: %{x:.1f}<br>"
+                                            "Range: %{customdata[1]:.0f} - %{customdata[2]:.0f}<br>"
+                                            "PPG: %{customdata[0]:.2f}<br>"
+                                            "ADP: %{customdata[3]:.1f}"
+                                            "<extra></extra>"
+                                        ),
+                                        showlegend=False,
+                                    )
+                                )
+                                
+                                fig.update_layout(
+                                    title=f"<b>{selected_pos}</b> — Value by Points",
+                                    xaxis_title="Projected Points",
+                                    yaxis_title="Player",
+                                    height=300,
+                                    template='plotly_white',
+                                    margin=dict(l=150, r=40, t=50, b=50),
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True, key=f"gold_mine_unassigned_{round_num}")
+                    
+                    # Player selection dropdown (filtered by round and position)
+                    st.write("**Select Target Player:**")
+                    
+                    if selected_pos in ['LB', 'DL', 'DB']:
+                        # Defense: sorted by PPG descending (already sorted above)
+                        player_list = round_range_players.sort_values('PPG', ascending=False)
+                    else:
+                        # Offense: sort by PPG (value)
+                        player_list = round_range_players.sort_values('PPG', ascending=False)
+                    
+                    if not player_list.empty:
+                        player_options = player_list['name_x'].tolist()
+                        
+                        selected_player = st.selectbox(
+                            "Player",
+                            player_options,
+                            index=0,
+                            key=f"plan_player_{round_num}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Save button
+                        if st.button(f"💾 Save Round {round_num} Plan", key=f"save_plan_{round_num}", use_container_width=True):
+                            st.session_state['plan_picks'][round_num] = {
+                                'round': round_num,
+                                'position': selected_pos,
+                                'target_player': selected_player,
+                                'status': 'ACTIVE'
+                            }
+                            
+                            # Save to config
+                            if config_filename:
+                                plan_list = list(st.session_state['plan_picks'].values())
+                                ConfigManager.save_plan(config_filename, plan_list)
+                            
+                            st.success(f"✅ Round {round_num}: {selected_pos} → {selected_player}")
+                            st.rerun()
+                    else:
+                        st.warning(f"No {selected_pos} players available for this round range.")
     
     
+    # ============================================================================
+    # === TAB 3: HYPOTHETICAL ROSTER ===
+    # ============================================================================
+    with tab_roster:
+        st.write("**Hypothetical Roster - Your Draft Plan**")
+        st.write("*Starting Lineup with Marginal Value, then Bench Players*")
+        
+        plan_picks = st.session_state.get('plan_picks', {})
+        slot_counts = st.session_state.get('slot_counts', {})
+        
+        if plan_picks and slot_counts:
+            # Build starting roster structure based on slot_counts, preserving ESPN order
+            # slot_counts comes from ESPN as OrderedDict with positions in order
+            starting_slots = []
+            for pos, count in slot_counts.items():
+                if pos not in ["IR", "", "BENCH", "BE"] and "/" not in pos:
+                    starting_slots.extend([(pos, i+1) for i in range(count)])
+            
+            # Prepare player lookup - all picks sorted by round
+            all_picks_by_round = {}
+            
+            for round_num in sorted(plan_picks.keys()):
+                pick = plan_picks[round_num]
+                position = pick.get('position')
+                player_name = pick.get('target_player')
+                status = pick.get('status', 'ACTIVE')
+                
+                if status == 'INVALIDATED':
+                    continue
+                
+                player_match = player_data_all[player_data_all['name_x'] == player_name]
+                if not player_match.empty:
+                    player = player_match.iloc[0]
+                    ppg = player.get('PPG', 0) if not pd.isna(player.get('PPG', 0)) else 0
+                    points = player.get('points', 0) if not pd.isna(player.get('points', 0)) else 0
+                    
+                    all_picks_by_round[round_num] = {
+                        'position': position,
+                        'player_name': player_name,
+                        'ppg': ppg,
+                        'points': points,
+                        'round_num': round_num
+                    }
+            
+            # Assign players to starting slots
+            starters = []
+            bench = []
+            assigned_picks = set()
+            
+            # Phase 1: Assign position-specific players to their slots (QB1, RB1, RB2, etc.)
+            for slot_pos, slot_num in starting_slots:
+                if slot_pos == "FLEX":
+                    continue  # Handle FLEX separately
+                
+                slot_filled = False
+                target_pos_rank = slot_num  # We want the Nth player at this position
+                current_pos_rank = 0
+                
+                for round_num in sorted(all_picks_by_round.keys()):
+                    pick = all_picks_by_round[round_num]
+                    if pick['position'] == slot_pos and round_num not in assigned_picks:
+                        current_pos_rank += 1
+                        if current_pos_rank == target_pos_rank:
+                            # Found the Nth player for this position
+                            tier_baseline = tier_baselines.get(slot_pos, {}).get(slot_num - 1, 0)
+                            marg_val = pick['ppg'] - tier_baseline
+                            starters.append({
+                                'SLOT': slot_pos,
+                                'S#': f"{slot_pos}{slot_num}",
+                                'Player': pick['player_name'],
+                                'FPTS': round(pick['points'], 1),
+                                'AVG': round(pick['ppg'], 1),
+                                'Marg Val': round(marg_val, 1),
+                                'POS AVG': round(tier_baseline, 1),
+                                'Round': round_num
+                            })
+                            assigned_picks.add(round_num)
+                            slot_filled = True
+                            break
+                
+                if not slot_filled:
+                    # Slot not filled - show as empty
+                    starters.append({
+                        'SLOT': slot_pos,
+                        'S#': f"{slot_pos}{slot_num}",
+                        'Player': "—",
+                        'FPTS': 0,
+                        'AVG': 0,
+                        'Marg Val': 0,
+                        'POS AVG': 0,
+                        'Round': None
+                    })
+            
+            # Phase 2: Assign remaining players to FLEX slots (best available)
+            remaining_picks = {k: v for k, v in all_picks_by_round.items() if k not in assigned_picks}
+            
+            for slot_pos, slot_num in starting_slots:
+                if slot_pos == "FLEX":
+                    # Find the highest PPG player from remaining
+                    if remaining_picks:
+                        best_round = max(remaining_picks.keys(), key=lambda r: remaining_picks[r]['ppg'])
+                        pick = remaining_picks.pop(best_round)
+                        
+                        # FLEX tier baseline is the position's bench baseline (tier 0)
+                        tier_baseline = tier_baselines.get(pick['position'], {}).get(0, 0)
+                        marg_val = pick['ppg'] - tier_baseline
+                        
+                        starters.append({
+                            'SLOT': 'FLEX',
+                            'S#': f"FLEX{slot_num}",
+                            'Player': pick['player_name'],
+                            'FPTS': round(pick['points'], 1),
+                            'AVG': round(pick['ppg'], 1),
+                            'Marg Val': round(marg_val, 1),
+                            'POS AVG': round(tier_baseline, 1),
+                            'Round': best_round
+                        })
+                    else:
+                        # No remaining players for this FLEX slot
+                        starters.append({
+                            'SLOT': 'FLEX',
+                            'S#': f"FLEX{slot_num}",
+                            'Player': "—",
+                            'FPTS': 0,
+                            'AVG': 0,
+                            'Marg Val': 0,
+                            'POS AVG': 0,
+                            'Round': None
+                        })
+            
+            # Phase 3: Everything left goes to bench
+            for round_num in sorted(remaining_picks.keys()):
+                pick = remaining_picks[round_num]
+                tier_baseline = tier_baselines.get(pick['position'], {}).get(0, 0)
+                marg_val = pick['ppg'] - tier_baseline
+                bench.append({
+                    'Position': pick['position'],
+                    'Player': pick['player_name'],
+                    'FPTS': round(pick['points'], 1),
+                    'AVG': round(pick['ppg'], 1),
+                    'Marg Val': round(marg_val, 1),
+                    'Round': round_num
+                })
+            
+            # Display Starting Lineup
+            if starters:
+                st.write("### 🏈 Starting Lineup")
+                starters_df = pd.DataFrame(starters)
+                st.dataframe(
+                    starters_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'SLOT': st.column_config.TextColumn(width="small"),
+                        'S#': st.column_config.TextColumn(width="small"),
+                        'Player': st.column_config.TextColumn(width="large"),
+                        'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'POS AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Round': st.column_config.NumberColumn(format="%d", width="small"),
+                    }
+                )
+                starters_ppg = starters_df[starters_df['AVG'] > 0]['AVG'].sum()
+                starters_marg = starters_df[starters_df['Marg Val'] > 0]['Marg Val'].sum()
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Lineup PPG", round(starters_ppg, 1))
+                with col2:
+                    st.metric("Lineup Marg Val", round(starters_marg, 1))
+                with col3:
+                    st.metric("Slots Filled", len([s for s in starters if s['Player'] != "—"]))
+            
+            # Display Bench
+            if bench:
+                st.write("### 🛋️ Bench")
+                bench_df = pd.DataFrame(bench)
+                st.dataframe(
+                    bench_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Position': st.column_config.TextColumn(width="small"),
+                        'Player': st.column_config.TextColumn(width="large"),
+                        'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Round': st.column_config.NumberColumn(format="%d", width="small"),
+                    }
+                )
+                bench_ppg = bench_df['AVG'].sum()
+                st.caption(f"Bench PPG: {round(bench_ppg, 1)}")
+        else:
+            if not plan_picks:
+                st.info("No plan picks yet. Go to 'Build Plan' tab to start planning your draft.")
+            if not slot_counts:
+                st.warning("League slot information not loaded. Check that ESPN league was fetched correctly.")

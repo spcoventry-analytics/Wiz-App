@@ -725,3 +725,53 @@ def show_configuration():
                 st.write("**Draft Order:**", league_info['draft_order'])
             except Exception as e:
                 st.error(f"Could not load config details: {e}")
+            
+            # Show available saved plans with scores
+            st.markdown("---")
+            with st.expander("📊 Saved Plans & Scores"):
+                st.write("**Available Strategies & Plans**")
+                st.write("Score your plans on: Total POS Value | Total Norm Value | Total PPG")
+                
+                try:
+                    # Load player data for scoring
+                    import glob
+                    csv_files = glob.glob(f"draft_results_{league_info['league_id']}_*.csv")
+                    if csv_files:
+                        csv_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                        player_data = pd.read_csv(csv_files[0])
+                        
+                        # Load tier baselines for scoring
+                        from app import calculate_tier_baselines
+                        tier_baselines = calculate_tier_baselines(player_data)
+                        
+                        # Score all available plans
+                        plans_data = []
+                        for plan_config in configs:
+                            try:
+                                cfg = ConfigManager.load_config(plan_config)
+                                plan = cfg.get('plan', [])
+                                
+                                if plan:
+                                    score = ConfigManager.calculate_plan_score(plan, player_data, tier_baselines)
+                                    plans_data.append({
+                                        'Config': plan_config,
+                                        'Total POS Value': score['total_pos_value'],
+                                        'Total Norm Value': score['total_norm_value'],
+                                        'Total PPG': score['total_ppg'],
+                                        'Picks': len(plan)
+                                    })
+                            except:
+                                pass
+                        
+                        if plans_data:
+                            plans_df = pd.DataFrame(plans_data).sort_values('Total PPG', ascending=False)
+                            st.dataframe(plans_df, use_container_width=True, hide_index=True)
+                            
+                            st.info("💡 **Tip:** Click on a config above to load it and seed your draft with this plan.")
+                        else:
+                            st.caption("No saved plans found. Build a strategy and plan to score it here.")
+                    else:
+                        st.warning("No draft_results CSV found. Cannot score plans without player data.")
+                except Exception as e:
+                    st.warning(f"Could not load plan scores: {e}")
+
