@@ -97,23 +97,17 @@ def load_config_on_startup():
                 league = League(league_id=int(league_info['league_id']), year=int(league_info['season_id']), espn_s2=espn_s2, swid=swid)
                 
                 # Extract slot_counts from league.settings.position_slot_counts
-                # Using same logic as configuration.py: separate FLEX from regular positions
+                # Including FLEX positions (contain "/")
                 if hasattr(league.settings, 'position_slot_counts'):
                     position_slot_counts = league.settings.position_slot_counts
                     
-                    # Separate FLEX positions (contain "/") from regular positions
                     slot_counts = {}
-                    flex_positions = {}
                     
                     for pos, count in position_slot_counts.items():
                         if count > 0 and pos not in ["BN", "BE", "IR", ""]:
-                            if "/" in pos:  # FLEX position
-                                flex_positions[pos] = count
-                            else:  # Regular position
-                                slot_counts[pos] = count
+                            slot_counts[pos] = count
                     
                     st.session_state['slot_counts'] = slot_counts
-                    st.session_state['flex_positions'] = flex_positions
                 
                 # Set up position colors (user's preferred scheme)
                 position_colors = {

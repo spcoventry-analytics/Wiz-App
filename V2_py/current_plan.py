@@ -603,9 +603,10 @@ def show_current_plan():
         if plan_picks and slot_counts:
             # Build starting roster structure based on slot_counts, preserving ESPN order
             # slot_counts comes from ESPN as OrderedDict with positions in order
+            # Note: FLEX positions come as "RB/WR/TE" etc (the "/" indicates flex eligibility)
             starting_slots = []
             for pos, count in slot_counts.items():
-                if pos not in ["IR", "", "BENCH", "BE"] and "/" not in pos:
+                if pos not in ["IR", "", "BENCH", "BE"]:
                     starting_slots.extend([(pos, i+1) for i in range(count)])
             
             # Prepare player lookup - all picks sorted by round
@@ -638,128 +639,159 @@ def show_current_plan():
             starters = []
             bench = []
             assigned_picks = set()
-            
-            # Phase 1: Assign position-specific players to their slots (QB1, RB1, RB2, etc.)
-            for slot_pos, slot_num in starting_slots:
-                if slot_pos == "FLEX":
-                    continue  # Handle FLEX separately
-                
-                slot_filled = False
-                target_pos_rank = slot_num  # We want the Nth player at this position
-                current_pos_rank = 0
-                
-                for round_num in sorted(all_picks_by_round.keys()):
-                    pick = all_picks_by_round[round_num]
-                    if pick['position'] == slot_pos and round_num not in assigned_picks:
-                        current_pos_rank += 1
-                        if current_pos_rank == target_pos_rank:
-                            # Found the Nth player for this position
-                            tier_baseline = tier_baselines.get(slot_pos, {}).get(slot_num - 1, 0)
-                            marg_val = pick['ppg'] - tier_baseline
-                            starters.append({
-                                'SLOT': slot_pos,
-                                'S#': f"{slot_pos}{slot_num}",
-                                'Player': pick['player_name'],
-                                'FPTS': round(pick['points'], 1),
-                                'AVG': round(pick['ppg'], 1),
-                                'Marg Val': round(marg_val, 1),
-                                'POS AVG': round(tier_baseline, 1),
-                                'Round': round_num
-                            })
-                            assigned_picks.add(round_num)
-                            slot_filled = True
-                            break
-                
-                if not slot_filled:
-                    # Slot not filled - show as empty
-                    starters.append({
-                        'SLOT': slot_pos,
-                        'S#': f"{slot_pos}{slot_num}",
-                        'Player': "—",
-                        'FPTS': 0,
-                        'AVG': 0,
-                        'Marg Val': 0,
-                        'POS AVG': 0,
-                        'Round': None
-                    })
-            
-            # Phase 2: Assign remaining players to FLEX slots (best available)
             remaining_picks = {k: v for k, v in all_picks_by_round.items() if k not in assigned_picks}
+            flex_slot_num = 0  # Track FLEX slot number
             
+            # Single pass through starting slots in ESPN order - handle both regular positions and FLEX
             for slot_pos, slot_num in starting_slots:
-                if slot_pos == "FLEX":
-                    # Find the highest PPG player from remaining
-                    if remaining_picks:
-                        best_round = max(remaining_picks.keys(), key=lambda r: remaining_picks[r]['ppg'])
+                if "/" in slot_pos:
+                    # FLEX slot (e.g., "RB/WR/TE") - assign best available from eligible positions
+                    flex_slot_num += 1
+                    slot_id = f"FLEX{flex_slot_num}"
+                    eligible_positions = [p.strip() for p in slot_pos.split("/")]
+                    
+                    # Find the highest PPG player from remaining picks that matches eligible positions
+                    best_round = None
+                    for round_num in sorted(remaining_picks.keys()):
+                        # Handle both single position (e.g., "RB") and multi-position (e.g., "RB/WR/TE")
+                        player_positions = [p.strip() for p in remaining_picks[round_num]['position'].split('/')]
+                        if any(p in eligible_positions for p in player_positions):
+                            if best_round is None or remaining_picks[round_num]['ppg'] > remaining_picks[best_round]['ppg']:
+                                best_round = round_num
+                    
+                    if best_round is not None:
                         pick = remaining_picks.pop(best_round)
                         
                         # FLEX tier baseline is the position's bench baseline (tier 0)
-                        tier_baseline = tier_baselines.get(pick['position'], {}).get(0, 0)
-                        marg_val = pick['ppg'] - tier_baseline
+                        # For multi-position players (e.g., "RB/WR/TE"), use primary position
+                        primary_position = pick['position'].split('/')[0].strip()
+                        tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
+                        # Position Independent Value = PPG / Position Average (if avg > 0)
+                        pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
                         
                         starters.append({
-                            'SLOT': 'FLEX',
-                            'S#': f"FLEX{slot_num}",
+                            'Slot ID': slot_id,
+                            'SLOT': slot_pos,
                             'Player': pick['player_name'],
                             'FPTS': round(pick['points'], 1),
                             'AVG': round(pick['ppg'], 1),
-                            'Marg Val': round(marg_val, 1),
+                            'POS Val': pos_val,
                             'POS AVG': round(tier_baseline, 1),
                             'Round': best_round
                         })
                     else:
-                        # No remaining players for this FLEX slot
+                        # No matching players for this FLEX slot
                         starters.append({
-                            'SLOT': 'FLEX',
-                            'S#': f"FLEX{slot_num}",
+                            'Slot ID': slot_id,
+                            'SLOT': slot_pos,
                             'Player': "—",
                             'FPTS': 0,
                             'AVG': 0,
-                            'Marg Val': 0,
+                            'POS Val': 0,
+                            'POS AVG': 0,
+                            'Round': None
+                        })
+                else:
+                    # Regular position slot (QB, RB, WR, TE, LB, DL, DB)
+                    slot_id = f"{slot_pos}{slot_num}"
+                    slot_filled = False
+                    target_pos_rank = slot_num  # We want the Nth player at this position
+                    current_pos_rank = 0
+                    
+                    for round_num in sorted(all_picks_by_round.keys()):
+                        pick = all_picks_by_round[round_num]
+                        # Match exact position OR multi-position eligibility (e.g., "RB" matches "RB/WR/TE")
+                        player_positions = [p.strip() for p in pick['position'].split('/')] if '/' in pick['position'] else [pick['position']]
+                        if slot_pos in player_positions and round_num not in assigned_picks:
+                            current_pos_rank += 1
+                            if current_pos_rank == target_pos_rank:
+                                # Found the Nth player for this position
+                                tier_baseline = tier_baselines.get(slot_pos, {}).get(slot_num - 1, 0)
+                                # Position Independent Value = PPG / Position Average (if avg > 0)
+                                pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
+                                starters.append({
+                                    'Slot ID': slot_id,
+                                    'SLOT': slot_pos,
+                                    'Player': pick['player_name'],
+                                    'FPTS': round(pick['points'], 1),
+                                    'AVG': round(pick['ppg'], 1),
+                                    'POS Val': pos_val,
+                                    'POS AVG': round(tier_baseline, 1),
+                                    'Round': round_num
+                                })
+                                assigned_picks.add(round_num)
+                                remaining_picks.pop(round_num, None)  # Remove from remaining so FLEX doesn't reuse
+                                slot_filled = True
+                                break
+                    
+                    if not slot_filled:
+                        # Slot not filled - show as empty
+                        starters.append({
+                            'Slot ID': slot_id,
+                            'SLOT': slot_pos,
+                            'Player': "—",
+                            'FPTS': 0,
+                            'AVG': 0,
+                            'POS Val': 0,
                             'POS AVG': 0,
                             'Round': None
                         })
             
-            # Phase 3: Everything left goes to bench
+            # Everything remaining goes to bench
             for round_num in sorted(remaining_picks.keys()):
                 pick = remaining_picks[round_num]
-                tier_baseline = tier_baselines.get(pick['position'], {}).get(0, 0)
-                marg_val = pick['ppg'] - tier_baseline
+                # For multi-position players (e.g., "RB/WR/TE"), use primary position
+                primary_position = pick['position'].split('/')[0].strip()
+                tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
+                # Position Independent Value = PPG / Position Average (if avg > 0)
+                pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
                 bench.append({
+                    'Slot ID': 'BENCH',
                     'Position': pick['position'],
                     'Player': pick['player_name'],
                     'FPTS': round(pick['points'], 1),
                     'AVG': round(pick['ppg'], 1),
-                    'Marg Val': round(marg_val, 1),
+                    'POS Val': pos_val,
                     'Round': round_num
                 })
             
             # Display Starting Lineup
             if starters:
                 st.write("### 🏈 Starting Lineup")
+                # Hide scrollbar on starting lineup table
+                st.markdown(
+                    """
+                    <style>
+                    [data-testid="stDataFrame"] {max-height: none; overflow: visible;}
+                    [data-testid="stDataFrame"] [role="presentation"] {max-height: none; overflow: visible;}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 starters_df = pd.DataFrame(starters)
+                # Reorder columns: SLOT, POS AVG, Player, FPTS, AVG, POS Val, Round (hide Slot ID)
+                starters_df = starters_df[['SLOT', 'POS AVG', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round']]
                 st.dataframe(
                     starters_df,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         'SLOT': st.column_config.TextColumn(width="small"),
-                        'S#': st.column_config.TextColumn(width="small"),
+                        'POS AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'Player': st.column_config.TextColumn(width="large"),
                         'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'POS AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
                     }
                 )
                 starters_ppg = starters_df[starters_df['AVG'] > 0]['AVG'].sum()
-                starters_marg = starters_df[starters_df['Marg Val'] > 0]['Marg Val'].sum()
+                starters_pos_val = starters_df[starters_df['POS Val'] > 0]['POS Val'].sum()
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Lineup PPG", round(starters_ppg, 1))
                 with col2:
-                    st.metric("Lineup Marg Val", round(starters_marg, 1))
+                    st.metric("Avg POS Val", round(starters_pos_val / len([s for s in starters if s['Player'] != "—"]), 2) if len([s for s in starters if s['Player'] != "—"]) > 0 else 0)
                 with col3:
                     st.metric("Slots Filled", len([s for s in starters if s['Player'] != "—"]))
             
@@ -767,6 +799,8 @@ def show_current_plan():
             if bench:
                 st.write("### 🛋️ Bench")
                 bench_df = pd.DataFrame(bench)
+                # Reorder columns: Position, Player, FPTS, AVG, POS Val, Round (hide Slot ID)
+                bench_df = bench_df[['Position', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round']]
                 st.dataframe(
                     bench_df,
                     use_container_width=True,
@@ -776,7 +810,7 @@ def show_current_plan():
                         'Player': st.column_config.TextColumn(width="large"),
                         'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'Marg Val': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
                     }
                 )
