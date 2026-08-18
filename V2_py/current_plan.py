@@ -595,8 +595,10 @@ def show_current_plan():
     # ============================================================================
     with tab_roster:
         st.write("**Hypothetical Roster - Your Draft Plan**")
-        st.write("*Starting Lineup with Marginal Value, then Bench Players*")
+        st.write("*Keepers → Actual Picks → Planned Picks, then Starting Lineup with Bench*")
         
+        keepers_dict = st.session_state.get('keepers', {})
+        my_team = st.session_state.get('my_team')
         plan_picks = st.session_state.get('plan_picks', {})
         slot_counts = st.session_state.get('slot_counts', {})
         
@@ -609,9 +611,62 @@ def show_current_plan():
                 if pos not in ["IR", "", "BENCH", "BE"]:
                     starting_slots.extend([(pos, i+1) for i in range(count)])
             
-            # Prepare player lookup - all picks sorted by round
+            # Prepare player lookup - combine keepers, actual picks, and planned picks in order
             all_picks_by_round = {}
             
+            # STEP 1: Add keepers (locked in, highest priority)
+            if my_team and my_team in keepers_dict:
+                for keeper in keepers_dict[my_team]:
+                    keeper_name = keeper.get('name')
+                    keeper_pos = keeper.get('position')
+                    keeper_pick_num = keeper.get('pick', 0)
+                    
+                    # Calculate round from pick number
+                    if keeper_pick_num > 0:
+                        keeper_round = int(np.ceil(keeper_pick_num / num_teams))
+                        keeper_round = keeper_round * 100  # Prefix with 100 to sort keepers first
+                    else:
+                        keeper_round = 1000  # Fallback
+                    
+                    player_match = player_data_all[player_data_all['name_x'] == keeper_name]
+                    if not player_match.empty:
+                        player = player_match.iloc[0]
+                        ppg = player.get('PPG', 0) if not pd.isna(player.get('PPG', 0)) else 0
+                        points = player.get('points', 0) if not pd.isna(player.get('points', 0)) else 0
+                        
+                        all_picks_by_round[keeper_round] = {
+                            'position': keeper_pos,
+                            'player_name': keeper_name,
+                            'ppg': ppg,
+                            'points': points,
+                            'round_num': int(keeper_round / 100),  # Store actual round
+                            'source': 'keeper'
+                        }
+            
+            # STEP 2: Add actual picks already made (from draft_results CSV)
+            my_actual_picks = player_data_all[
+                (player_data_all['owner'] == my_team) & 
+                (player_data_all['pick_number'] > 0)
+            ].copy()
+            
+            for _, actual_pick in my_actual_picks.iterrows():
+                pick_num = actual_pick.get('pick_number', 0)
+                pick_round = int(np.ceil(pick_num / num_teams))
+                pick_round = pick_round * 100 + 50  # Sort between keepers and planned picks
+                
+                ppg = actual_pick.get('PPG', 0) if not pd.isna(actual_pick.get('PPG', 0)) else 0
+                points = actual_pick.get('points', 0) if not pd.isna(actual_pick.get('points', 0)) else 0
+                
+                all_picks_by_round[pick_round] = {
+                    'position': actual_pick.get('position'),
+                    'player_name': actual_pick.get('name_x'),
+                    'ppg': ppg,
+                    'points': points,
+                    'round_num': int(pick_round / 100),  # Store actual round
+                    'source': 'actual'
+                }
+            
+            # STEP 3: Add planned/hypothetical picks
             for round_num in sorted(plan_picks.keys()):
                 pick = plan_picks[round_num]
                 position = pick.get('position')
@@ -632,14 +687,15 @@ def show_current_plan():
                         'player_name': player_name,
                         'ppg': ppg,
                         'points': points,
-                        'round_num': round_num
+                        'round_num': round_num,
+                        'source': 'planned'
                     }
             
             # Assign players to starting slots
             starters = []
             bench = []
             
-            # Keep a working copy of available picks ordered by round
+            # Keep a working copy of available picks ordered by round (keepers/actual first, then planned)
             available_picks = dict(all_picks_by_round)
             flex_slot_num = 0  # Track FLEX slot number
 
@@ -652,15 +708,18 @@ def show_current_plan():
                     eligible_positions = [p.strip() for p in slot_pos.split("/")]
 
                     # Find highest PPG eligible player from remaining available picks
-                    best_round = None
-                    for round_num, pick in sorted(available_picks.items()):
+                    # Prioritize keepers/actual, then planned
+                    best_sort_key = None
+                    best_pick_key = None
+                    for sort_key, pick in available_picks.items():
                         player_positions = [p.strip() for p in pick['position'].split('/')]
                         if any(p in eligible_positions for p in player_positions):
-                            if best_round is None or pick['ppg'] > available_picks[best_round]['ppg']:
-                                best_round = round_num
+                            if best_pick_key is None or pick['ppg'] > available_picks[best_sort_key]['ppg']:
+                                best_sort_key = sort_key
+                                best_pick_key = sort_key
 
-                    if best_round is not None:
-                        pick = available_picks.pop(best_round)
+                    if best_pick_key is not None:
+                        pick = available_picks.pop(best_pick_key)
                         primary_position = pick['position'].split('/')[0].strip()
                         tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
                         pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
@@ -673,7 +732,8 @@ def show_current_plan():
                             'AVG': round(pick['ppg'], 1),
                             'POS Val': pos_val,
                             'POS AVG': round(tier_baseline, 1),
-                            'Round': best_round
+                            'Round': pick['round_num'],
+                            'Source': pick.get('source', 'planned')
                         })
                     else:
                         starters.append({
@@ -684,22 +744,25 @@ def show_current_plan():
                             'AVG': 0,
                             'POS Val': 0,
                             'POS AVG': 0,
-                            'Round': None
+                            'Round': None,
+                            'Source': '—'
                         })
                 else:
                     # Regular position slot (QB, RB, WR, TE, etc.)
                     slot_id = f"{slot_pos}{slot_num}"
-                    matched_round = None
+                    matched_key = None
 
                     # Grab the earliest drafted available player for this position
-                    for round_num, pick in sorted(available_picks.items()):
+                    # Iterate through sorted keys to prioritize keepers/actual
+                    for sort_key in sorted(available_picks.keys()):
+                        pick = available_picks[sort_key]
                         player_positions = [p.strip() for p in pick['position'].split('/')]
                         if slot_pos in player_positions:
-                            matched_round = round_num
+                            matched_key = sort_key
                             break
 
-                    if matched_round is not None:
-                        pick = available_picks.pop(matched_round)
+                    if matched_key is not None:
+                        pick = available_picks.pop(matched_key)
                         tier_baseline = tier_baselines.get(slot_pos, {}).get(slot_num - 1, 0)
                         pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
 
@@ -711,7 +774,8 @@ def show_current_plan():
                             'AVG': round(pick['ppg'], 1),
                             'POS Val': pos_val,
                             'POS AVG': round(tier_baseline, 1),
-                            'Round': matched_round
+                            'Round': pick['round_num'],
+                            'Source': pick.get('source', 'planned')
                         })
                     else:
                         starters.append({
@@ -722,11 +786,12 @@ def show_current_plan():
                             'AVG': 0,
                             'POS Val': 0,
                             'POS AVG': 0,
-                            'Round': None
+                            'Round': None,
+                            'Source': '—'
                         })
 
             # Anything remaining in available_picks goes to bench
-            for round_num, pick in sorted(available_picks.items()):
+            for sort_key, pick in sorted(available_picks.items()):
                 primary_position = pick['position'].split('/')[0].strip()
                 tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
                 pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
@@ -738,7 +803,8 @@ def show_current_plan():
                     'FPTS': round(pick['points'], 1),
                     'AVG': round(pick['ppg'], 1),
                     'POS Val': pos_val,
-                    'Round': round_num
+                    'Round': pick['round_num'],
+                    'Source': pick.get('source', 'planned')
                 })
 
             # Display Starting Lineup
@@ -755,8 +821,9 @@ def show_current_plan():
                     unsafe_allow_html=True,
                 )
                 starters_df = pd.DataFrame(starters)
-                # Reorder columns: SLOT, POS AVG, Player, FPTS, AVG, POS Val, Round (hide Slot ID)
-                starters_df = starters_df[['SLOT', 'POS AVG', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round']]
+                # Reorder columns: SLOT, POS AVG, Player, FPTS, AVG, POS Val, Round, Source
+                display_cols = [col for col in ['SLOT', 'POS AVG', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round', 'Source'] if col in starters_df.columns]
+                starters_df = starters_df[display_cols]
                 st.dataframe(
                     starters_df,
                     use_container_width=True,
@@ -770,6 +837,7 @@ def show_current_plan():
                         'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
+                        'Source': st.column_config.TextColumn(width="small"),
                     }
                 )
                 starters_ppg = starters_df[starters_df['AVG'] > 0]['AVG'].sum()
@@ -786,8 +854,9 @@ def show_current_plan():
             if bench:
                 st.write("### 🛋️ Bench")
                 bench_df = pd.DataFrame(bench)
-                # Reorder columns: Position, Player, FPTS, AVG, POS Val, Round (hide Slot ID)
-                bench_df = bench_df[['Position', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round']]
+                # Reorder columns: Position, Player, FPTS, AVG, POS Val, Round, Source
+                display_cols = [col for col in ['Position', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round', 'Source'] if col in bench_df.columns]
+                bench_df = bench_df[display_cols]
                 st.dataframe(
                     bench_df,
                     use_container_width=True,
@@ -799,6 +868,7 @@ def show_current_plan():
                         'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
+                        'Source': st.column_config.TextColumn(width="small"),
                     }
                 )
                 bench_ppg = bench_df['AVG'].sum()
