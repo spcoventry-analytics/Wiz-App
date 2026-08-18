@@ -202,6 +202,24 @@
       "position": "QB",
       "target_player": "Dak Prescott",
       "status": "ACTIVE"
+    },
+    {
+      "round": 11,
+      "position": "RB",
+      "target_player": "Tyrone Tracy Jr.",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 12,
+      "position": "WR",
+      "target_player": "Jauan Jennings",
+      "status": "ACTIVE"
+    },
+    {
+      "round": 13,
+      "position": "RB",
+      "target_player": "Quinshon Judkins",
+      "status": "ACTIVE"
     }
   ]
 }
