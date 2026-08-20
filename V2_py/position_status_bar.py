@@ -62,7 +62,7 @@ def show_position_status_bar():
             
             # Count filled slots for my team
             filled_slots = len(my_team_picks[my_team_picks['position'] == pos])
-            empty_slots = total_slots - filled_slots
+            empty_slots = max(0, total_slots - filled_slots)
             
             # Get available players at this position
             available_players = player_data_all[
@@ -79,19 +79,19 @@ def show_position_status_bar():
             
             # Elasticity: PPG cost if we wait one round
             elasticity = 0
+            margin = 0
+            ratio = 0
+
             if best_available is not None and len(available_players) > num_teams:
                 next_round_available = available_players.iloc[num_teams]
-                elasticity = best_available['PPG'] - next_round_available['PPG']
+                margin = best_available['PPG'] - next_round_available['PPG']
+                ratio = margin / max(best_available['PPG'], 1)
+                elasticity = margin * ratio
             
             # Urgency score (0-2.0 scale for gauge)
             urgency_score = 0
             if empty_slots > 0:
-                if elasticity > 1.0:
-                    urgency_score = 1.5 + (elasticity / 5.0)  # High elasticity = more urgent
-                elif elasticity > 0.5:
-                    urgency_score = 1.0
-                else:
-                    urgency_score = 0.5
+                urgency_score = min(2.0, elasticity * 1.5)
             
             # Scarcity: ADP-aware drafted count
             adp_aware_drafted = 0
@@ -113,8 +113,10 @@ def show_position_status_bar():
                 'Slots': f"{filled_slots}/{total_slots}",
                 'Empty': empty_slots,
                 'Starters': len(available_players[available_players['PPG'] >= tier_baseline]) if tier_baseline > 0 else len(available_players),
+                'Margin': round(margin, 1),
+                'Ratio': round(ratio, 2),
+                'Elasticity': round(elasticity, 2),
                 'Scarcity %': int(scarcity_ratio),
-                'Elasticity': round(elasticity, 1),
                 'Color': position_colors.get(pos, '#CCCCCC'),
             })
         
@@ -157,8 +159,8 @@ def show_position_status_bar():
                     st.caption(f"**Scarcity:** {status['Scarcity %']}%")
                     
                     # Elasticity warning
-                    if status['Elasticity'] > 1.0:
-                        st.caption(f"⚡ Elasticity: {status['Elasticity']}")
+                    st.caption(f"➕ Margin: {status['Margin']}")
+                    st.caption(f"⚡ Elasticity: {status['Elasticity']}")
         
         st.divider()
         

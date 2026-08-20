@@ -84,5 +84,495 @@ The app will be built using streamlit for the UI, with pandas for all data manip
 - All future agents should reference this file for project conventions
 
 ---
+_as of update: August 9, 2025_
 
-_Last updated: August 9, 2025_
+# Fantasy Draft Assistant Architecture & Valuation Model
+
+## Core Design Philosophy
+
+The application operates across three decision layers:
+
+### 1. Static Player Values
+
+Answer:
+
+> How good is this player?
+
+These values are generated before the draft and should not change because other players have been selected.
+
+Examples:
+
+```python
+PPG
+points
+floor
+ceiling
+tier
+position_rank
+adp
+age
+depth
+draft_year
+```
+
+---
+
+### 2. Dynamic Draft Values
+
+Answer:
+
+> What happens if I wait?
+
+These values change after every pick and describe the current state of the draft board.
+
+Examples:
+
+```python
+margin
+ratio
+elasticity
+urgency
+scarcity_ratio
+adp_aware_drafted
+```
+
+---
+
+### 3. Dynamic Planning Values
+
+Answer:
+
+> Given everything that has happened so far, what should my plan be now?
+
+These values represent the current recommended draft plan and should evolve throughout the draft.
+
+Examples:
+
+```python
+target_rounds
+plan_picks
+draft_plan
+target_player
+ACTIVE
+INVALIDATED
+COMPLETED
+```
+
+---
+
+# Tab Ownership
+
+## Position Status Bar
+
+### Purpose
+
+Answer:
+
+> Which position becomes most expensive if I wait?
+
+### Uses
+
+Dynamic Draft Values only.
+
+### Key Metrics
+
+```python
+margin
+ratio
+elasticity
+urgency
+scarcity
+```
+
+### Updates
+
+Every pick.
+
+### User Question
+
+> What position is most urgent right now?
+
+### Category
+
+Tactical Decision Support.
+
+---
+
+## Consider Options (Gold Mine)
+
+### Purpose
+
+Answer:
+
+> I am currently on the clock. Which players deserve serious consideration?
+
+### Uses
+
+```text
+Static Player Values
++
+Dynamic Draft Values
+```
+
+### Key Metrics
+
+```python
+PPG
+points
+floor
+ceiling
+tier
+position_rank
+
+margin
+ratio
+elasticity
+urgency
+scarcity
+```
+
+### Updates
+
+Every pick.
+
+### User Question
+
+> Who should I be considering right now?
+
+### Category
+
+Tactical Decision Support.
+
+### Important Rule
+
+Gold Mine evaluates immediate choices.
+
+Gold Mine does not create draft plans.
+
+---
+
+## Current Plan
+
+### Purpose
+
+Answer:
+
+> Given the current board, what should my draft plan be now?
+
+### Uses
+
+```text
+Static Player Values
++
+Dynamic Planning Values
+```
+
+### Updates
+
+Every pick.
+
+### User Question
+
+> What should my future draft look like from this point forward?
+
+### Category
+
+Strategic Planning.
+
+### Important Rule
+
+Current Plan is intentionally dynamic.
+
+A Round 1 plan is only a starting point.
+
+As the draft evolves:
+
+- players get drafted
+- targets become unavailable
+- positional needs change
+- scarcity changes
+- roster gaps appear
+
+The plan should continuously adapt.
+
+### Expected Behavior
+
+If a planned player is drafted:
+
+1. Invalidate the player target.
+2. Evaluate replacement candidates.
+3. Re-evaluate future rounds.
+4. Adjust the remaining plan when appropriate.
+
+Example:
+
+```text
+Initial:
+R5 WR
+R6 RB
+R7 TE
+
+After WR Run:
+R5 WR
+R6 WR
+R8 RB
+R9 TE
+```
+
+The plan adapts.
+
+---
+
+## Hypothetical Roster
+
+### Purpose
+
+Answer:
+
+> If I follow the current plan, what roster will I end up with?
+
+### Uses
+
+```text
+Static Player Values
++
+Dynamic Planning Values
+```
+
+### Inputs
+
+```python
+keepers
+actual_picks
+plan_picks
+tier_baselines
+```
+
+### Outputs
+
+```python
+starting_lineup
+bench
+lineup_ppg
+position_values
+```
+
+### Category
+
+Plan Evaluation.
+
+### Important Rule
+
+Hypothetical Roster evaluates plans.
+
+Hypothetical Roster does not generate plans.
+
+---
+
+# Static Player Values
+
+## Rules
+
+- Generated before the draft.
+- Represent player quality.
+- Do not change during the draft.
+- Should not increase simply because better players have been drafted.
+
+## Used By
+
+```text
+Current Plan
+Hypothetical Roster
+Consider Options
+```
+
+---
+
+# Dynamic Draft Values
+
+## Margin
+
+```python
+margin = best_available_ppg - next_round_available_ppg
+```
+
+Raw PPG lost by waiting.
+
+### Marker
+
+```text
+📉
+```
+
+---
+
+## Ratio
+
+```python
+ratio = margin / best_available_ppg
+```
+
+Percentage value lost by waiting.
+
+### Marker
+
+```text
+📊
+```
+
+---
+
+## Elasticity
+
+```python
+elasticity = margin * ratio
+```
+
+Combined urgency signal.
+
+### Marker
+
+```text
+⚡
+```
+
+---
+
+## Urgency
+
+```python
+urgency = min(2.0, elasticity * 1.5)
+```
+
+Position priority gauge.
+
+---
+
+## Scarcity
+
+```python
+adp_aware_drafted
+scarcity_ratio
+```
+
+Measures how much expected positional talent has already disappeared.
+
+## Used By
+
+```text
+Position Status Bar
+Consider Options
+On-The-Clock Assistant
+```
+
+---
+
+# Dynamic Planning Values
+
+## Purpose
+
+Maintain the best available draft plan as conditions change.
+
+## Core Objects
+
+```python
+target_rounds_QB
+target_rounds_RB
+target_rounds_WR
+target_rounds_TE
+target_rounds_LB
+target_rounds_DL
+target_rounds_DB
+
+plan_picks
+draft_plan
+```
+
+## Status Values
+
+```python
+ACTIVE
+INVALIDATED
+COMPLETED
+```
+
+---
+
+# Future Decision Engine
+
+## Purpose
+
+Answer:
+
+> What should I do next?
+
+### Inputs
+
+```text
+Static Player Values
++
+Dynamic Draft Values
++
+Dynamic Planning Values
+```
+
+### Potential Metrics
+
+```python
+planning_score
+replacement_score
+future_value
+draft_cost
+```
+
+### Consumers
+
+```text
+Current Plan
+Consider Options
+On-The-Clock Assistant
+```
+
+---
+
+# Architectural Rules
+
+## Rule 1
+
+Player quality remains stable.
+
+Do not inflate player value because better players were drafted.
+
+---
+
+## Rule 2
+
+Urgency is dynamic.
+
+Elasticity, scarcity, margin, ratio, and urgency should update after every pick.
+
+---
+
+## Rule 3
+
+Plans are dynamic.
+
+Draft plans are living documents and should continuously adapt.
+
+---
+
+## Rule 4
+
+Tab Responsibilities
+
+```text
+Position Status Bar = Position urgency right now.
+
+Consider Options = Player choices right now.
+
+Current Plan = Future strategy.
+
+Hypothetical Roster = Evaluate plan outcome.
+```
+---
+update as of 8/20/2026
