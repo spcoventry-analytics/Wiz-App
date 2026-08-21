@@ -115,6 +115,10 @@ depth
 draft_year
 ```
 
+these values are found on the draft_results_[league_id]_[YEAR].csv file, and loaded into the session state after configuration is complete. (configuration.py)  
+
+- ghost of christmas past (it is what we thought before the draft started)
+
 ---
 
 ### 2. Dynamic Draft Values
@@ -135,6 +139,10 @@ urgency
 scarcity_ratio
 adp_aware_drafted
 ```
+
+these values are calculated by position_status_bar.py, and stored in the session state after every pick. (enter_pick.py) 
+
+- ghost of Christmas present (it is what is happening right now as we make a decision)
 
 ---
 
@@ -157,6 +165,8 @@ ACTIVE
 INVALIDATED
 COMPLETED
 ```
+- ghost of Christmas future (it is what we think will happen if we follow the plan, or what will change moving forward) 
+- Don't let Tiny Timmy die! Save Christmas, avoid gaps in the roster caused by necessary pivots in the plan, and avoid drafting players that are not needed.
 
 ---
 

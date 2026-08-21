@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from config_manager import ConfigManager
+from configuration import normalize_position
 
 def show_current_plan():
     st.title("Current Plan")
@@ -65,12 +66,14 @@ def show_current_plan():
         st.write("**Strategy Builder: Point Ranges by Draft Round**")
         st.write("*See how points per player vary by draft round for each position. Select target rounds for your strategy.*")
         
+        st.markdown("---")
+        
         # Get available players
         available_players_strat = player_data_all[player_data_all["pick_number"] == 0].copy()
         
-        # Get position filter
-        available_positions_strat = sorted(available_players_strat['position'].unique())
-        position_filter = st.selectbox("Filter by Position (optional):", ["All"] + available_positions_strat)
+        # Get position filter - limited to positions with slots in the hypothetical roster
+        available_positions_strat = [pos for pos in slot_counts.keys() if pos not in ["IR", "", "FLEX", "BENCH", "BE"] and "/" not in pos]
+        position_filter = st.radio("Filter by Position:", ["All"] + available_positions_strat, horizontal=True)
         
         if position_filter != "All":
             available_players_strat = available_players_strat[available_players_strat['position'] == position_filter]
@@ -78,17 +81,35 @@ def show_current_plan():
         if available_players_strat.empty:
             st.warning("No players available for strategy building.")
         else:
-            # Calculate draft round for each player
-            available_players_strat = available_players_strat.dropna(subset=['adp']).copy()
-            available_players_strat['draft_round'] = np.ceil(available_players_strat['adp'].fillna(999) / num_teams).astype(int)
-            available_players_strat['draft_round'] = available_players_strat['draft_round'].clip(lower=1, upper=21)
+            # Separate offensive and defensive handling
+            offensive_strat = available_players_strat[available_players_strat['position'].isin(['QB', 'RB', 'WR', 'TE'])].copy()
+            defensive_strat = available_players_strat[available_players_strat['position'].isin(['LB', 'DL', 'DB'])].copy()
+            
+            # For offensive players: require ADP for round calculation
+            offensive_strat = offensive_strat.dropna(subset=['adp']).copy()
+            offensive_strat['draft_round'] = np.ceil(offensive_strat['adp'].fillna(999) / num_teams).astype(int)
+            offensive_strat['draft_round'] = offensive_strat['draft_round'].clip(lower=1, upper=21)
+            
+            # For defensive players: use PPG (no ADP required)
+            defensive_strat['PPG'] = defensive_strat['PPG'].fillna(0)
+            defensive_strat['draft_round'] = 21  # Placeholder round for defense
+            
+            # Combine both
+            available_players_strat = pd.concat([offensive_strat, defensive_strat], ignore_index=True)
             
             # Get positions to show
             positions_to_show = [position_filter] if position_filter != "All" else sorted(available_players_strat['position'].unique())
             
             for pos in positions_to_show:
                 pos_players = available_players_strat[available_players_strat['position'] == pos].copy()
-                pos_players = pos_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points', 'adp'])
+                
+                # Only require ADP/PPG fields for offensive positions
+                if pos in ['QB', 'RB', 'WR', 'TE']:
+                    pos_players = pos_players.dropna(subset=['PPG', 'floor', 'ceiling', 'points', 'adp'])
+                else:
+                    # For defensive positions, just need PPG (fillna to 0 if missing)
+                    pos_players['PPG'] = pos_players['PPG'].fillna(0)
+                    pos_players = pos_players[pos_players['PPG'] >= 0]  # Just remove NaN
                 
                 if pos_players.empty:
                     continue
@@ -221,11 +242,22 @@ def show_current_plan():
         st.write("**Build Your Draft Plan**")
         st.write("*Expand each round to select a position and target player. Strategy targets will be highlighted.*")
         
-        # Get available players
+        # Get available players (separate offensive and defensive handling)
         available_players = player_data_all[player_data_all["pick_number"] == 0].copy()
-        available_players = available_players.dropna(subset=['adp', 'points'])
-        available_players['draft_round'] = (np.ceil(available_players['adp'] / num_teams)).fillna(1).astype(int)
-        available_players['draft_round'] = available_players['draft_round'].clip(lower=1, upper=21)
+        
+        # For offensive players, require ADP for round calculation
+        offensive_players = available_players[available_players['position'].isin(['QB', 'RB', 'WR', 'TE'])].copy()
+        offensive_players = offensive_players.dropna(subset=['adp', 'points'])
+        offensive_players['draft_round'] = (np.ceil(offensive_players['adp'] / num_teams)).fillna(1).astype(int)
+        offensive_players['draft_round'] = offensive_players['draft_round'].clip(lower=1, upper=21)
+        
+        # For defensive players, use PPG for ranking (no ADP required)
+        defensive_players = available_players[available_players['position'].isin(['LB', 'DL', 'DB'])].copy()
+        defensive_players['PPG'] = defensive_players['PPG'].fillna(0)  # Ensure PPG has values
+        defensive_players['draft_round'] = 21  # Assign to last round as placeholder
+        
+        # Combine both
+        available_players = pd.concat([offensive_players, defensive_players], ignore_index=True)
         
         # Get strategy targets
         strategy_targets = {}
@@ -615,41 +647,67 @@ def show_current_plan():
             all_picks_by_round = {}
             
             # STEP 1: Add keepers (locked in, highest priority)
+            # Keepers use same structure as configuration.py: 'player' and 'position' keys
             if my_team and my_team in keepers_dict:
                 for keeper in keepers_dict[my_team]:
-                    keeper_name = keeper.get('name')
-                    keeper_pos = keeper.get('position')
+                    keeper_name = keeper.get('player')
+                    keeper_pos = normalize_position(keeper.get('position'))
                     keeper_pick_num = keeper.get('pick', 0)
                     
-                    # Calculate round from pick number
+                    # Calculate round from pick number (same as configuration.py logic)
                     if keeper_pick_num > 0:
                         keeper_round = int(np.ceil(keeper_pick_num / num_teams))
-                        keeper_round = keeper_round * 100  # Prefix with 100 to sort keepers first
+                        keeper_round_key = keeper_round * 100  # Prefix with 100 to sort keepers first
                     else:
-                        keeper_round = 1000  # Fallback
+                        continue  # Skip keepers without pick number
                     
+                    # Match player by name_x, checking position with normalization fallback (like configuration.py)
                     player_match = player_data_all[player_data_all['name_x'] == keeper_name]
                     if not player_match.empty:
-                        player = player_match.iloc[0]
-                        ppg = player.get('PPG', 0) if not pd.isna(player.get('PPG', 0)) else 0
-                        points = player.get('points', 0) if not pd.isna(player.get('points', 0)) else 0
-                        
-                        all_picks_by_round[keeper_round] = {
-                            'position': keeper_pos,
-                            'player_name': keeper_name,
-                            'ppg': ppg,
-                            'points': points,
-                            'round_num': int(keeper_round / 100),  # Store actual round
-                            'source': 'keeper'
-                        }
+                        # If multiple matches, check position with normalization fallback
+                        found = False
+                        for idx in player_match.index:
+                            player_pos = player_data_all.loc[idx, 'position']
+                            position_fallback = player_data_all.loc[idx, 'position_x']
+                            normalized_fallback = normalize_position(position_fallback)
+                            
+                            # Match if keeper position == player position OR normalized position_x
+                            if (keeper_pos == player_pos) or (keeper_pos == normalized_fallback):
+                                player = player_data_all.loc[idx]
+                                ppg = player.get('PPG', 0) if not pd.isna(player.get('PPG', 0)) else 0
+                                points = player.get('points', 0) if not pd.isna(player.get('points', 0)) else 0
+                                
+                                all_picks_by_round[keeper_round_key] = {
+                                    'position': keeper_pos,
+                                    'player_name': keeper_name,
+                                    'ppg': ppg,
+                                    'points': points,
+                                    'round_num': keeper_round,
+                                    'source': 'keeper'
+                                }
+                                found = True
+                                break
             
             # STEP 2: Add actual picks already made (from draft_results CSV)
+            # BUT: Skip if player is already a keeper (deduplication)
             my_actual_picks = player_data_all[
                 (player_data_all['owner'] == my_team) & 
                 (player_data_all['pick_number'] > 0)
             ].copy()
             
+            # Get keeper player names to avoid duplicates
+            keeper_names = set()
+            if my_team and my_team in keepers_dict:
+                for keeper in keepers_dict[my_team]:
+                    keeper_names.add(keeper.get('player'))
+            
             for _, actual_pick in my_actual_picks.iterrows():
+                player_name = actual_pick.get('name_x')
+                
+                # Skip this actual pick if it's already counted as a keeper
+                if player_name in keeper_names:
+                    continue
+                
                 pick_num = actual_pick.get('pick_number', 0)
                 pick_round = int(np.ceil(pick_num / num_teams))
                 pick_round = pick_round * 100 + 50  # Sort between keepers and planned picks
@@ -659,7 +717,7 @@ def show_current_plan():
                 
                 all_picks_by_round[pick_round] = {
                     'position': actual_pick.get('position'),
-                    'player_name': actual_pick.get('name_x'),
+                    'player_name': player_name,
                     'ppg': ppg,
                     'points': points,
                     'round_num': int(pick_round / 100),  # Store actual round
@@ -676,13 +734,25 @@ def show_current_plan():
                 if status == 'INVALIDATED':
                     continue
                 
+                # Match target player by name_x with position fallback for duplicates (like configuration.py)
                 player_match = player_data_all[player_data_all['name_x'] == player_name]
                 if not player_match.empty:
-                    player = player_match.iloc[0]
+                    # If multiple matches, prefer position match
+                    if len(player_match) > 1:
+                        pos_matches = player_match[player_match['position'] == position]
+                        if not pos_matches.empty:
+                            player = pos_matches.iloc[0]
+                        else:
+                            player = player_match.iloc[0]
+                    else:
+                        player = player_match.iloc[0]
+                    
                     ppg = player.get('PPG', 0) if not pd.isna(player.get('PPG', 0)) else 0
                     points = player.get('points', 0) if not pd.isna(player.get('points', 0)) else 0
                     
-                    all_picks_by_round[round_num] = {
+                    # Sort key: plan picks go after keepers and actual picks
+                    plan_round_key = round_num * 100 + 99
+                    all_picks_by_round[plan_round_key] = {
                         'position': position,
                         'player_name': player_name,
                         'ppg': ppg,
@@ -697,6 +767,7 @@ def show_current_plan():
             
             # Keep a working copy of available picks ordered by round (keepers/actual first, then planned)
             available_picks = dict(all_picks_by_round)
+            used_player_names = set()  # Track which players have been assigned (prevent duplicates)
             flex_slot_num = 0  # Track FLEX slot number
 
             # Pass through starting slots in ESPN order
@@ -709,9 +780,13 @@ def show_current_plan():
 
                     # Find highest PPG eligible player from remaining available picks
                     # Prioritize keepers/actual, then planned
+                    # Skip players already assigned to prevent duplicates
                     best_sort_key = None
                     best_pick_key = None
                     for sort_key, pick in available_picks.items():
+                        player_name = pick['player_name']
+                        if player_name in used_player_names:
+                            continue  # Skip already-used players
                         player_positions = [p.strip() for p in pick['position'].split('/')]
                         if any(p in eligible_positions for p in player_positions):
                             if best_pick_key is None or pick['ppg'] > available_picks[best_sort_key]['ppg']:
@@ -720,18 +795,39 @@ def show_current_plan():
 
                     if best_pick_key is not None:
                         pick = available_picks.pop(best_pick_key)
+                        player_name = pick['player_name']
+                        used_player_names.add(player_name)  # Mark as used
                         primary_position = pick['position'].split('/')[0].strip()
-                        tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
-                        pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
+                        
+                        # Get tier_baseline - ensure defensive positions are included
+                        if primary_position in tier_baselines:
+                            tier_baseline = tier_baselines[primary_position].get(0, 0)
+                        else:
+                            # For defensive positions or missing tier_baselines, calculate on the fly
+                            pos_players = player_data_all[
+                                (player_data_all['position'] == primary_position) &
+                                (player_data_all['pick_number'] == 0)
+                            ].sort_values('PPG', ascending=False)
+                            # Get average of top tier (first num_teams players)
+                            if len(pos_players) >= num_teams:
+                                tier_baseline = pos_players.iloc[:num_teams]['PPG'].mean()
+                            else:
+                                tier_baseline = pos_players['PPG'].mean() if not pos_players.empty else 0
+                        
+                        # Ensure PPG is valid (especially for defensive players)
+                        ppg_value = pick['ppg'] if pick['ppg'] > 0 else 0
+                        
+                        # Calculate edge = PPG - position average
+                        edge = ppg_value - tier_baseline
 
                         starters.append({
                             'Slot ID': slot_id,
                             'SLOT': slot_pos,
                             'Player': pick['player_name'],
                             'FPTS': round(pick['points'], 1),
-                            'AVG': round(pick['ppg'], 1),
-                            'POS Val': pos_val,
-                            'POS AVG': round(tier_baseline, 1),
+                            'PPG': round(ppg_value, 1),
+                            'Edge': round(edge, 1),
+                            'Tier Baseline': round(tier_baseline, 1),
                             'Round': pick['round_num'],
                             'Source': pick.get('source', 'planned')
                         })
@@ -741,9 +837,9 @@ def show_current_plan():
                             'SLOT': slot_pos,
                             'Player': "—",
                             'FPTS': 0,
-                            'AVG': 0,
-                            'POS Val': 0,
-                            'POS AVG': 0,
+                            'PPG': 0,
+                            'Edge': 0,
+                            'Tier Baseline': 0,
                             'Round': None,
                             'Source': '—'
                         })
@@ -754,8 +850,12 @@ def show_current_plan():
 
                     # Grab the earliest drafted available player for this position
                     # Iterate through sorted keys to prioritize keepers/actual
+                    # Skip players already assigned to prevent duplicates
                     for sort_key in sorted(available_picks.keys()):
                         pick = available_picks[sort_key]
+                        player_name = pick['player_name']
+                        if player_name in used_player_names:
+                            continue  # Skip already-used players
                         player_positions = [p.strip() for p in pick['position'].split('/')]
                         if slot_pos in player_positions:
                             matched_key = sort_key
@@ -763,17 +863,38 @@ def show_current_plan():
 
                     if matched_key is not None:
                         pick = available_picks.pop(matched_key)
-                        tier_baseline = tier_baselines.get(slot_pos, {}).get(slot_num - 1, 0)
-                        pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
+                        player_name = pick['player_name']
+                        used_player_names.add(player_name)  # Mark as used
+                        
+                        # Get tier_baseline - ensure defensive positions are included
+                        if slot_pos in tier_baselines and (slot_num - 1) in tier_baselines[slot_pos]:
+                            tier_baseline = tier_baselines[slot_pos][slot_num - 1]
+                        else:
+                            # For defensive positions or missing tier_baselines, calculate on the fly
+                            pos_players = player_data_all[
+                                (player_data_all['position'] == slot_pos) &
+                                (player_data_all['pick_number'] == 0)
+                            ].sort_values('PPG', ascending=False)
+                            # Get average of this tier (slot_num * num_teams players)
+                            tier_start = (slot_num - 1) * num_teams
+                            tier_end = slot_num * num_teams
+                            tier_players = pos_players.iloc[tier_start:tier_end]
+                            tier_baseline = tier_players['PPG'].mean() if not tier_players.empty else 0
+                        
+                        # Ensure PPG is valid (especially for defensive players)
+                        ppg_value = pick['ppg'] if pick['ppg'] > 0 else 0
+                        
+                        # Calculate edge = PPG - position average
+                        edge = ppg_value - tier_baseline
 
                         starters.append({
                             'Slot ID': slot_id,
                             'SLOT': slot_pos,
                             'Player': pick['player_name'],
                             'FPTS': round(pick['points'], 1),
-                            'AVG': round(pick['ppg'], 1),
-                            'POS Val': pos_val,
-                            'POS AVG': round(tier_baseline, 1),
+                            'PPG': round(ppg_value, 1),
+                            'Edge': round(edge, 1),
+                            'Tier Baseline': round(tier_baseline, 1),
                             'Round': pick['round_num'],
                             'Source': pick.get('source', 'planned')
                         })
@@ -783,26 +904,49 @@ def show_current_plan():
                             'SLOT': slot_pos,
                             'Player': "—",
                             'FPTS': 0,
-                            'AVG': 0,
-                            'POS Val': 0,
-                            'POS AVG': 0,
+                            'PPG': 0,
+                            'Edge': 0,
+                            'Tier Baseline': 0,
                             'Round': None,
                             'Source': '—'
                         })
 
             # Anything remaining in available_picks goes to bench
             for sort_key, pick in sorted(available_picks.items()):
+                player_name = pick['player_name']
+                if player_name in used_player_names:
+                    continue  # Skip if somehow already used
+                    
                 primary_position = pick['position'].split('/')[0].strip()
-                tier_baseline = tier_baselines.get(primary_position, {}).get(0, 0)
-                pos_val = round(pick['ppg'] / tier_baseline, 2) if tier_baseline > 0 else 0
+                
+                # Get tier_baseline - ensure defensive positions are included
+                if primary_position in tier_baselines:
+                    tier_baseline = tier_baselines[primary_position].get(0, 0)
+                else:
+                    # For defensive positions or missing tier_baselines, calculate on the fly
+                    pos_players = player_data_all[
+                        (player_data_all['position'] == primary_position) &
+                        (player_data_all['pick_number'] == 0)
+                    ].sort_values('PPG', ascending=False)
+                    # Get average of top tier (first num_teams players)
+                    if len(pos_players) >= num_teams:
+                        tier_baseline = pos_players.iloc[:num_teams]['PPG'].mean()
+                    else:
+                        tier_baseline = pos_players['PPG'].mean() if not pos_players.empty else 0
+                
+                # Ensure PPG is valid (especially for defensive players)
+                ppg_value = pick['ppg'] if pick['ppg'] > 0 else 0
+                
+                # Calculate edge = PPG - position average
+                edge = ppg_value - tier_baseline
                 
                 bench.append({
                     'Slot ID': 'BENCH',
                     'Position': pick['position'],
                     'Player': pick['player_name'],
                     'FPTS': round(pick['points'], 1),
-                    'AVG': round(pick['ppg'], 1),
-                    'POS Val': pos_val,
+                    'PPG': round(ppg_value, 1),
+                    'Edge': round(edge, 1),
                     'Round': pick['round_num'],
                     'Source': pick.get('source', 'planned')
                 })
@@ -821,8 +965,8 @@ def show_current_plan():
                     unsafe_allow_html=True,
                 )
                 starters_df = pd.DataFrame(starters)
-                # Reorder columns: SLOT, POS AVG, Player, FPTS, AVG, POS Val, Round, Source
-                display_cols = [col for col in ['SLOT', 'POS AVG', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round', 'Source'] if col in starters_df.columns]
+                # Reorder columns: SLOT, Tier Baseline, Player, FPTS, PPG, Edge, Round, Source
+                display_cols = [col for col in ['SLOT', 'Tier Baseline', 'Player', 'FPTS', 'PPG', 'Edge', 'Round', 'Source'] if col in starters_df.columns]
                 starters_df = starters_df[display_cols]
                 st.dataframe(
                     starters_df,
@@ -831,22 +975,22 @@ def show_current_plan():
                     height=(len(starters_df) + 1) * 35 + 3,
                     column_config={
                         'SLOT': st.column_config.TextColumn(width="small"),
-                        'POS AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Tier Baseline': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'Player': st.column_config.TextColumn(width="large"),
                         'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
+                        'PPG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Edge': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
                         'Source': st.column_config.TextColumn(width="small"),
                     }
                 )
-                starters_ppg = starters_df[starters_df['AVG'] > 0]['AVG'].sum()
-                starters_pos_val = starters_df[starters_df['POS Val'] > 0]['POS Val'].sum()
+                starters_ppg = starters_df[starters_df['PPG'] > 0]['PPG'].sum()
+                starters_edge = starters_df['Edge'].sum()
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Lineup PPG", round(starters_ppg, 1))
+                    st.metric("Total PPG", round(starters_ppg, 1))
                 with col2:
-                    st.metric("Avg POS Val", round(starters_pos_val / len([s for s in starters if s['Player'] != "—"]), 2) if len([s for s in starters if s['Player'] != "—"]) > 0 else 0)
+                    st.metric("Total Edge", round(starters_edge, 1))
                 with col3:
                     st.metric("Slots Filled", len([s for s in starters if s['Player'] != "—"]))
             
@@ -854,8 +998,8 @@ def show_current_plan():
             if bench:
                 st.write("### 🛋️ Bench")
                 bench_df = pd.DataFrame(bench)
-                # Reorder columns: Position, Player, FPTS, AVG, POS Val, Round, Source
-                display_cols = [col for col in ['Position', 'Player', 'FPTS', 'AVG', 'POS Val', 'Round', 'Source'] if col in bench_df.columns]
+                # Reorder columns: Position, Player, FPTS, PPG, Edge, Round, Source
+                display_cols = [col for col in ['Position', 'Player', 'FPTS', 'PPG', 'Edge', 'Round', 'Source'] if col in bench_df.columns]
                 bench_df = bench_df[display_cols]
                 st.dataframe(
                     bench_df,
@@ -865,14 +1009,15 @@ def show_current_plan():
                         'Position': st.column_config.TextColumn(width="small"),
                         'Player': st.column_config.TextColumn(width="large"),
                         'FPTS': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'AVG': st.column_config.NumberColumn(format="%.1f", width="small"),
-                        'POS Val': st.column_config.NumberColumn(format="%.2f", width="small"),
+                        'PPG': st.column_config.NumberColumn(format="%.1f", width="small"),
+                        'Edge': st.column_config.NumberColumn(format="%.1f", width="small"),
                         'Round': st.column_config.NumberColumn(format="%d", width="small"),
                         'Source': st.column_config.TextColumn(width="small"),
                     }
                 )
-                bench_ppg = bench_df['AVG'].sum()
-                st.caption(f"Bench PPG: {round(bench_ppg, 1)}")
+                bench_ppg = bench_df['PPG'].sum()
+                bench_edge = bench_df['Edge'].sum()
+                st.caption(f"Bench PPG: {round(bench_ppg, 1)} | Bench Edge: {round(bench_edge, 1)}")
         else:
             if not plan_picks:
                 st.info("No plan picks yet. Go to 'Build Plan' tab to start planning your draft.")
